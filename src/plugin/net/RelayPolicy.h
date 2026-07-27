@@ -35,9 +35,13 @@ namespace coop {
 //     author them, so a relayed copy could only be spoof or noise
 //   - the save/load bulk transfer (SAVE_BEGIN/FILE/DONE/ACK, LOAD_GO): host <-> ONE
 //     peer by construction, and SaveXfer is still one global state machine
-//   - CAM_HINT: harmless in principle, but peerCam_ is a SINGLE slot, so a third
-//     hint would just overwrite the second. Needs the anchor set to become
-//     per-peer first (see MAX_INTEREST_LEADERS in game/Engine.h).
+//   - CAM_HINT: join->host only, and the HOST is its only consumer - it decides
+//     what to stream for everyone. A join drives peer SQUAD bodies, which the
+//     tab-leader spheres already anchor, so a peer's viewpoint tells it nothing
+//     it acts on. Relaying it was tried and reverted: the receiving side never
+//     drains the queue (the drain lives in the host branch), so it was pure dead
+//     weight on the wire. Making joins consume it would change what each client
+//     streams - a gameplay-visible change with no evidence it is wanted.
 //   - COMBAT_HIT: join->host BY DESIGN. The host applies the damage
 //     authoritatively and the result mirrors back over the vitals channel.
 //     Relaying would let a second peer apply the same damage again (double-count).

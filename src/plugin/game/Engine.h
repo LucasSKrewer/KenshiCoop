@@ -189,7 +189,10 @@ bool cameraCenter(GameWorld* gw, float out[3]);
 // squad-tab leader spheres. valid=false clears the anchor (camera not up /
 // hint stale). Main-thread only.
 void setLocalCamAnchor(bool valid, float x, float y, float z);
-void setPeerCamHint(bool valid, float x, float y, float z);
+// N peer camera hints at once: xyz is 3*count floats, count <= MAX_PEER_CAM_HINTS
+// (extra are ignored). Replaces the single-slot setPeerCamHint - the caller (the
+// host's sync layer) owns freshness, so anything passed here is live.
+void setPeerCamHints(const float* xyz, unsigned int count);
 // KENSHICOOP_CAM_INTEREST master enable: when off, interestCenters ignores
 // the camera anchors (squad-tab leaders only - the pre-43 behavior).
 void setCamInterest(bool on);
@@ -203,7 +206,12 @@ void setCamInterest(bool on);
 // is necessary-but-not-sufficient for N players - join-authored state still is
 // not relayed peer-to-peer, so a third player desyncs regardless.
 const unsigned int MAX_INTEREST_LEADERS = 3;
-const unsigned int MAX_INTEREST_CAMS    = 2;   // local camera + peer hint
+// Camera anchors: this client's own camera, plus ONE HINT PER REMOTE PLAYER.
+// This used to be a flat 2 (local + "the peer"), which is the same singular-peer
+// assumption as the leader cap: with two joins the second hint simply overwrote
+// the first, so one player's viewpoint silently stopped anchoring interest.
+const unsigned int MAX_PEER_CAM_HINTS   = 3;
+const unsigned int MAX_INTEREST_CAMS    = 1 + MAX_PEER_CAM_HINTS;
 const unsigned int MAX_INTEREST_ANCHORS = MAX_INTEREST_LEADERS + MAX_INTEREST_CAMS;
 const unsigned int INTEREST_ANCHOR_FLOATS = MAX_INTEREST_ANCHORS * 3;
 

@@ -761,27 +761,43 @@ void Replicator::syncCamHint(GameWorld* gw, Inbound& in, NetLink& net, u32 owner
         return;
     }
 
-    // HOST: drain received hints (latest wins) into peerCam_ + staleness
-    // stamp, and publish a FRESH hint to the engine's interest layer. A
-    // stale hint (silent join > 3 s: alt-tabbed, loading, disconnecting)
-    // drops out of the anchor set rather than pinning interest forever.
+    // HOST: drain received hints into a PER-PEER slot, then publish every FRESH
+    // one to the engine's interest layer.
+    //
+    // This was latest-wins into a SINGLE slot: with two joins each incoming hint
+    // erased the other's, so one player's viewpoint silently stopped anchoring
+    // interest and NPCs where they were LOOKING stopped being streamed. Keyed by
+    // ownerId now, and the 3 s staleness cut (silent peer: alt-tabbed, loading,
+    // disconnecting) is judged PER PEER - one quiet player can no longer age out
+    // another's hint.
     std::deque<InboundCamHint> got;
     in.drainCamHints(got);
+    for (std::deque<InboundCamHint>::iterator it = got.begin(); it != got.end(); ++it) {
+        PeerCam& pc = peerCams_[it->ownerId];
+        pc.xyz[0] = it->pkt.x; pc.xyz[1] = it->pkt.y; pc.xyz[2] = it->pkt.z;
+        pc.ms = now;
+    }
+    float hints[engine::MAX_PEER_CAM_HINTS * 3];
+    unsigned int nHints = 0;
+    for (std::map<u32, PeerCam>::iterator ci = peerCams_.begin();
+         ci != peerCams_.end() && nHints < engine::MAX_PEER_CAM_HINTS; ++ci) {
+        if (ci->second.ms == 0 || (now - ci->second.ms) > 3000) continue;
+        hints[nHints * 3 + 0] = ci->second.xyz[0];
+        hints[nHints * 3 + 1] = ci->second.xyz[1];
+        hints[nHints * 3 + 2] = ci->second.xyz[2];
+        ++nHints;
+    }
+    engine::setPeerCamHints(nHints ? hints : 0, nHints);
     if (!got.empty()) {
-        const CamHintPacket& p = got.back().pkt;
-        peerCam_[0] = p.x; peerCam_[1] = p.y; peerCam_[2] = p.z;
-        peerCamMs_ = now;
         static unsigned long logTick = 0; // main-thread only
         if (logTick == 0 || (now - logTick) >= 5000) {
             logTick = now;
-            char b[96];
-            _snprintf(b, sizeof(b) - 1, "[cam] hint recv=%.1f,%.1f,%.1f",
-                      p.x, p.y, p.z);
+            char b[112];
+            _snprintf(b, sizeof(b) - 1, "[cam] hints peers=%u fresh=%u",
+                      (unsigned)peerCams_.size(), nHints);
             b[sizeof(b) - 1] = '\0'; coop::logLine(b);
         }
     }
-    bool fresh = (peerCamMs_ != 0) && (now - peerCamMs_) <= 3000;
-    engine::setPeerCamHint(fresh, peerCam_[0], peerCam_[1], peerCam_[2]);
 }
 
 

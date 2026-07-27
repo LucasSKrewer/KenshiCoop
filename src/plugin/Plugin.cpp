@@ -107,6 +107,7 @@ struct SessionController {
     // flight); this is the backlog that feeds the next one.
     std::deque<coop::u32> xferPeers;   // peers awaiting a transfer, in NACK order
     std::string           xferName;    // the save they are waiting for
+    DWORD                 xferStartTick; // when the in-flight transfer was armed
     coop::u32    saveReqId;        // join: monotonic PKT_SAVE_REQ counter
     // Push-save-on-connect bootstrap (host): when a peer connects the host bakes
     // a fresh save of its live world and, once the folder quiesces, sends the
@@ -138,7 +139,7 @@ struct SessionController {
 
     SessionController()
       : gameStarted(false), gameStartTick(0), autoLoadDone(false),
-        titleFirstTick(0), peerPresent(false),
+        titleFirstTick(0), peerPresent(false), xferStartTick(0),
         saveReqId(0), bootstrapArmed(false),
         swapStartTick(0), swapHookTicks(0),
         loadSuppressOn(false), loadIdOut(0), loadIdSeen(0), loadReqId(0),
@@ -164,6 +165,7 @@ coop::u32&   g_loadReqId       = g_session.loadReqId;
 std::string& g_loadXferPending = g_session.loadXferPending;
 std::deque<coop::u32>& g_xferPeers = g_session.xferPeers;
 std::string&           g_xferName  = g_session.xferName;
+DWORD&                 g_xferStartTick = g_session.xferStartTick;
 std::string& g_loadAfterCommit = g_session.loadAfterCommit;
 coop::u32&   g_loadCommitBase  = g_session.loadCommitBase;
 DWORD&       g_loadPumpArmTick  = g_session.loadPumpArmTick;
@@ -667,10 +669,31 @@ void driveLoadSync(GameWorld* gw) {
             if (!already) g_xferPeers.push_back(it->ownerId);
             g_loadXferPending = name;   // kept: other code reads it as "a transfer is owed"
         }
-        // Serve ONE peer at a time; the rest stay queued and are served as each
-        // transfer completes (savexfer::sending() drops back to false).
+        // Serve ONE peer at a time. The gate is NOT just "sending() went false":
+        // sending() drops when the last chunk is ENQUEUED, while the net thread
+        // flushes the outbound queue later. Starting the next transfer there
+        // re-arms the addressed-send target (beginSend) BEFORE the previous
+        // transfer's tail has actually gone out, so its DONE ships to the WRONG
+        // peer. Measured, with the two transfers 2 s apart:
+        //     toPeer=1 (id=2) ... toPeer=2 (id=3)
+        //     XFER-ACK id=2 from=2 ok=0    <- peer 2 acked peer 1's transfer
+        //     XFER-ACK id=3 from=2 ok=0    <- and its own then failed (badCrc=1)
+        // Waiting for the previous xferId to be ACKNOWLEDGED closes that window:
+        // the ack can only arrive after the peer received the DONE, which means
+        // the queue is drained. lastAckXferId 0 = nothing sent yet (first pass).
+        // A never-arriving ack (peer dropped mid-transfer, ack lost) must not
+        // stall the queue forever - that would be worse than the race. After
+        // XFER_ACK_WAIT_MS the next peer is served anyway; by then the outbound
+        // queue has long drained, so the window this gate protects is closed.
+        const DWORD XFER_ACK_WAIT_MS = 15000;
+        const coop::u32 lastSent = coop::savexfer::lastSentXferId();
+        const bool acked   = (coop::savexfer::lastAckXferId() == lastSent);
+        const bool timedOut = (g_xferStartTick != 0) &&
+                              ((GetTickCount() - g_xferStartTick) > XFER_ACK_WAIT_MS);
+        const bool prevSettled = (lastSent == 0) || acked || timedOut;
         if (!g_xferPeers.empty() && !g_xferName.empty() &&
-            coop::engine::gameplayLive(gw) && !coop::savexfer::sending()) {
+            coop::engine::gameplayLive(gw) && !coop::savexfer::sending() &&
+            prevSettled) {
             const coop::u32 toPeer = g_xferPeers.front();
             g_xferPeers.pop_front();
             char b[176];
@@ -679,6 +702,7 @@ void driveLoadSync(GameWorld* gw) {
                       g_xferName.c_str(), (unsigned)toPeer,
                       (unsigned)g_xferPeers.size());
             b[sizeof(b) - 1] = '\0'; coopLog(b);
+            g_xferStartTick = GetTickCount();
             coop::savexfer::beginSend(g_net, g_net.localId(), g_xferName, toPeer);
             if (g_xferPeers.empty()) g_loadXferPending.clear();
         }

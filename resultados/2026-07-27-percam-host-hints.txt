@@ -1,0 +1,13 @@
+[19:38:36.440] [HOST] INFO: [cam] hints peers=1 fresh=1
+[19:38:42.447] [HOST] INFO: [cam] hints peers=1 fresh=1
+[19:38:47.448] [HOST] INFO: [cam] hints peers=1 fresh=1
+[19:38:52.741] [HOST] INFO: [cam] hints peers=1 fresh=1
+[19:38:57.853] [HOST] INFO: [cam] hints peers=1 fresh=1
+[19:39:16.700] [HOST] INFO: [cam] hints peers=1 fresh=1
+[19:39:21.755] [HOST] INFO: [cam] hints peers=1 fresh=1
+[19:39:26.803] [HOST] INFO: [cam] hints peers=2 fresh=2
+[19:39:31.857] [HOST] INFO: [cam] hints peers=2 fresh=2
+[19:39:36.860] [HOST] INFO: [cam] hints peers=2 fresh=2
+[19:39:41.915] [HOST] INFO: [cam] hints peers=2 fresh=2
+[19:39:47.113] [HOST] INFO: [cam] hints peers=2 fresh=2
+[19:39:52.179] [HOST] INFO: [cam] hints peers=2 fresh=2

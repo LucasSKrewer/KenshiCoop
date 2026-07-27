@@ -650,8 +650,10 @@ bool cameraCenter(GameWorld* gw, float out[3]) {
 static bool  s_camInterest    = true;  // KENSHICOOP_CAM_INTEREST master enable
 static bool  s_localCamValid  = false;
 static float s_localCam[3]    = { 0.0f, 0.0f, 0.0f };
-static bool  s_peerCamValid   = false;
-static float s_peerCam[3]     = { 0.0f, 0.0f, 0.0f };
+// One hint per remote player (was a single slot, so a second join's hint
+// overwrote the first and that player's viewpoint stopped anchoring interest).
+static unsigned int s_peerCamCount = 0;
+static float        s_peerCam[MAX_PEER_CAM_HINTS][3] = { { 0.0f, 0.0f, 0.0f } };
 
 void setCamInterest(bool on) { s_camInterest = on; }
 
@@ -660,9 +662,15 @@ void setLocalCamAnchor(bool valid, float x, float y, float z) {
     if (valid) { s_localCam[0] = x; s_localCam[1] = y; s_localCam[2] = z; }
 }
 
-void setPeerCamHint(bool valid, float x, float y, float z) {
-    s_peerCamValid = valid;
-    if (valid) { s_peerCam[0] = x; s_peerCam[1] = y; s_peerCam[2] = z; }
+void setPeerCamHints(const float* xyz, unsigned int count) {
+    if (!xyz) count = 0;
+    if (count > MAX_PEER_CAM_HINTS) count = MAX_PEER_CAM_HINTS;
+    for (unsigned int i = 0; i < count; ++i) {
+        s_peerCam[i][0] = xyz[i * 3 + 0];
+        s_peerCam[i][1] = xyz[i * 3 + 1];
+        s_peerCam[i][2] = xyz[i * 3 + 2];
+    }
+    s_peerCamCount = count;
 }
 
 // DUAL-INTEREST centers (step 5): one interest sphere per squad TAB leader, up
@@ -703,9 +711,12 @@ unsigned int interestCenters(GameWorld* gw, Ogre::Vector3 outC[MAX_INTEREST_ANCH
     // against everything already in the set. nc==0 stays 0: no players in
     // gameplay means no streaming at all (the camera alone must not stream).
     const float DEDUPE_DIST_SQ = 100.0f * 100.0f;
-    const float* cams[MAX_INTEREST_CAMS] = { s_localCamValid ? s_localCam : 0,
-                                             s_peerCamValid  ? s_peerCam  : 0 };
-    for (unsigned int ci = 0; ci < MAX_INTEREST_CAMS && nc < MAX_INTEREST_ANCHORS; ++ci) {
+    const float* cams[MAX_INTEREST_CAMS];
+    unsigned int nCams = 0;
+    if (s_localCamValid) cams[nCams++] = s_localCam;
+    for (unsigned int pi = 0; pi < s_peerCamCount && nCams < MAX_INTEREST_CAMS; ++pi)
+        cams[nCams++] = s_peerCam[pi];
+    for (unsigned int ci = 0; ci < nCams && nc < MAX_INTEREST_ANCHORS; ++ci) {
         if (!cams[ci]) continue;
         bool dup = false;
         for (unsigned int k = 0; k < nc && !dup; ++k) {

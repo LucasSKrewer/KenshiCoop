@@ -1307,7 +1307,11 @@ static void testRelayPolicy() {
     // Bulk save/load transfer: host <-> ONE peer, and SaveXfer is a global machine.
     RELAY_NO(PKT_SAVE_BEGIN); RELAY_NO(PKT_SAVE_FILE); RELAY_NO(PKT_SAVE_DONE);
     RELAY_NO(PKT_SAVE_ACK);   RELAY_NO(PKT_LOAD_GO);
-    // Deferred until their singular state becomes per-peer / to avoid double-apply.
+    // Still deferred: relaying would let a second peer apply the same damage again.
+    // CAM_HINT stays host-only: the host is its sole consumer (it streams for
+    // everyone), and a live run showed the receiving side never drains the queue,
+    // so relaying it was dead weight. The per-peer anchor fix that made relaying
+    // *possible* is still in - it is what stops two joins erasing each other's hint.
     RELAY_NO(PKT_CAM_HINT);   RELAY_NO(PKT_COMBAT_HIT);
 
     #undef RELAY_YES

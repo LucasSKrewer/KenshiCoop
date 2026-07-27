@@ -46,7 +46,7 @@ Replicator::Replicator()
       trustGrants_(0), trustRevokes_(0),
       authSuppresses_(0), authRestores_(0), authReassertMs_(0), authPruned_(0),
       censusRadius_(0.0f), censusSendMs_(0), censusRecvMs_(0), censusCulls_(0),
-      camHintSendMs_(0), peerCamMs_(0),
+      camHintSendMs_(0),
       midCursor_(0), midSliceMs_(0),
       censusParkDist_(0.0f), censusParks_(0), censusFreezeAi_(true),
       auditRows_(false), jailProbe_(false), jailObserve_(false),
@@ -69,7 +69,6 @@ Replicator::Replicator()
       timeSync_(true), timeSlew_(1.0f), timeSeqOut_(1), timeSeqSeen_(0),
       timeLastSendMs_(0), timeLastLogMs_(0), timeSlewApplied_(-1.0f),
       lifeSweepMs_(0) {
-    peerCam_[0] = peerCam_[1] = peerCam_[2] = 0.0f;
 }
 
 // ---- Phase 3: unified entity lifecycle ---------------------------------------
@@ -187,7 +186,7 @@ void Replicator::resetSession() {
     censusSendMs_ = 0;
     // Protocol 43: the camera hint describes the OLD world's coordinates.
     camHintSendMs_ = 0;
-    peerCamMs_ = 0;
+    peerCams_.clear();
     furnPeerPend_.clear();
     ownFurnExit_.clear();
     // Session maps + change-gate baselines (they describe the OLD world; the

@@ -608,8 +608,8 @@ public:
     // Camera hint channel (protocol 43, camera-anchored interest):
     //  * join: read the local camera center (engine::cameraCenter) and send
     //    it to the host at ~1 Hz (PKT_CAM_HINT, unreliable latest-wins);
-    //  * host: drain received hints into peerCam_/peerCamMs_ and publish the
-    //    fresh hint to the engine layer (engine::setPeerCamHint) so
+    //  * host: drain received hints into peerCams_ (one slot PER PEER) and
+    //    publish every fresh one to the engine (engine::setPeerCamHints) so
     //    interestCenters can anchor an extra sphere on it. Both sides also
     //    publish their LOCAL camera as an anchor (never crosses the wire).
     void syncCamHint(GameWorld* gw, Inbound& in, NetLink& net, u32 ownerId, bool isHost);
@@ -937,8 +937,16 @@ private:
     // ~1 Hz; the host keeps the latest hint + arrival stamp (stale hints are
     // dropped from the anchor set rather than pinning interest forever).
     unsigned long             camHintSendMs_; // join: last hint send
-    float                     peerCam_[3];    // host: latest peer camera center
-    unsigned long             peerCamMs_;     // host: its arrival time (0 = none)
+    // Host: ONE camera hint per peer. This was a single slot fed latest-wins, so
+    // with two joins each new hint erased the other's and one player's viewpoint
+    // stopped anchoring interest entirely. Keyed by ownerId; the arrival stamp is
+    // per peer too, so a silent peer's hint ages out on its own.
+    struct PeerCam {
+        float         xyz[3];
+        unsigned long ms;      // arrival time (0 = none)
+        PeerCam() : ms(0) { xyz[0] = xyz[1] = xyz[2] = 0.0f; }
+    };
+    std::map<u32, PeerCam>    peerCams_;
     std::set<Key>             censusHands_;   // join: latest existence set
     unsigned long             censusCulls_;   // join: wide-radius suppress count
     // Phase 2 mid-band streaming tier (HOST): census-walk NPCs OUTSIDE the
