@@ -50,25 +50,56 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module (Join-Path $scriptDir "CoopHarness.psm1") -Force
 
 # ---- Preflight ---------------------------------------------------------------
+# Ordered so the FIRST failure reported is the most fundamental one. Getting this
+# order wrong is not cosmetic: a still-copying install reported as "no plugin"
+# sends you deploying into a folder that is not finished yet.
 $installs = [ordered]@{ host = $HostDir; join1 = $Join1Dir; join2 = $Join2Dir }
+
+# 1. The install exists at all.
 foreach ($name in $installs.Keys) {
-    $exe = Join-Path $installs[$name] "kenshi_x64.exe"
-    if (-not (Test-Path $exe)) {
+    if (-not (Test-Path (Join-Path $installs[$name] "kenshi_x64.exe"))) {
         throw "$name install has no kenshi_x64.exe at '$($installs[$name])'. Create it with scripts\setup_join_install.cmd"
     }
-    # RE_Kenshi loads the plugin; without it the DLL never starts and the run is
-    # a silent no-op that looks like "the relay does not work".
+}
+
+# 2. Distinct folders, or the instances would share config/saves/logs.
+$paths = @($HostDir, $Join1Dir, $Join2Dir | ForEach-Object { (Resolve-Path $_).Path.TrimEnd('\').ToLower() })
+if (($paths | Select-Object -Unique).Count -ne 3) {
+    throw "host/join1/join2 must be three DISTINCT installs (they share config, saves and logs otherwise)."
+}
+
+# 3. COMPLETENESS, not just presence. robocopy writes kenshi_x64.exe early
+# (roughly alphabetical), so an install still being copied passes an exe-exists
+# check and then fails at runtime in a way that looks like a sync bug. Measured:
+# a copy 1.4 GB into a 15 GB install already had the exe.
+function Get-InstallSize {
+    param([string]$Dir)
+    return (Get-ChildItem $Dir -Recurse -File -ErrorAction SilentlyContinue |
+            Measure-Object -Property Length -Sum).Sum
+}
+$srcSize = Get-InstallSize $HostDir
+foreach ($name in @('join1', 'join2')) {
+    $sz  = Get-InstallSize $installs[$name]
+    $pct = if ($srcSize -gt 0) { 100.0 * $sz / $srcSize } else { 0 }
+    # 90%: the copy deliberately excludes save/ and the mutable cfg/log files, so
+    # an exact match is not expected - but a partial copy is nowhere near this.
+    if ($pct -lt 90.0) {
+        throw ("$name install looks INCOMPLETE: {0:N1} GB vs source {1:N1} GB ({2:N0}%). " -f `
+               ($sz/1GB), ($srcSize/1GB), $pct) +
+              "Still copying? Let scripts\setup_join_install.cmd finish, then re-run."
+    }
+    Write-Host ("  {0}: {1:N1} GB ({2:N0}% of source)" -f $name, ($sz/1GB), $pct)
+}
+
+# 4. Only now the mod bits: RE_Kenshi loads the plugin, and without either the
+# run is a silent no-op that reads as "the relay does not work".
+foreach ($name in $installs.Keys) {
     if (-not (Test-Path (Join-Path $installs[$name] "RE_Kenshi.dll"))) {
         throw "$name install is missing RE_Kenshi.dll ('$($installs[$name])'). The plugin would never load."
     }
     if (-not (Test-Path (Join-Path $installs[$name] "mods\KenshiCoop\KenshiCoop.dll"))) {
         throw "$name install has no mods\KenshiCoop\KenshiCoop.dll. Deploy with scripts\deploy.cmd `"$($installs[$name])`""
     }
-}
-# Distinct folders, or the instances would share mutable state.
-$paths = @($HostDir, $Join1Dir, $Join2Dir | ForEach-Object { (Resolve-Path $_).Path.TrimEnd('\').ToLower() })
-if (($paths | Select-Object -Unique).Count -ne 3) {
-    throw "host/join1/join2 must be three DISTINCT installs (they share config, saves and logs otherwise)."
 }
 
 if ($OutDir -eq "") {
