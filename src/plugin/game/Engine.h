@@ -194,11 +194,25 @@ void setPeerCamHint(bool valid, float x, float y, float z);
 // the camera anchors (squad-tab leaders only - the pre-43 behavior).
 void setCamInterest(bool on);
 
-// SEH-guarded: expose the current interest anchors (up to 4 x,y,z triples
-// into out[12]) to the sync layer - the mid-band nearest-first ordering
-// prioritizes by distance to the closest ANCHOR (tab leaders + cameras), so
-// camera-watched NPCs get mid-band drive slots too. Returns the anchor count.
-unsigned int interestAnchors(GameWorld* gw, float out[12]);
+// Interest-anchor budget. One sphere per distinct squad-tab LEADER, plus the
+// local camera center and the peer camera hint (protocol 43).
+//
+// MAX_INTEREST_LEADERS is the interest-sphere half of the two-player assumption
+// (the NetLink step-6 guard is the other half): a player whose squad tab gets no
+// anchor has NO NPCs streamed, censused or drive-ordered around them. Raising it
+// is necessary-but-not-sufficient for N players - join-authored state still is
+// not relayed peer-to-peer, so a third player desyncs regardless.
+const unsigned int MAX_INTEREST_LEADERS = 3;
+const unsigned int MAX_INTEREST_CAMS    = 2;   // local camera + peer hint
+const unsigned int MAX_INTEREST_ANCHORS = MAX_INTEREST_LEADERS + MAX_INTEREST_CAMS;
+const unsigned int INTEREST_ANCHOR_FLOATS = MAX_INTEREST_ANCHORS * 3;
+
+// SEH-guarded: expose the current interest anchors (up to MAX_INTEREST_ANCHORS
+// x,y,z triples into out[INTEREST_ANCHOR_FLOATS]) to the sync layer - the
+// mid-band nearest-first ordering prioritizes by distance to the closest ANCHOR
+// (tab leaders + cameras), so camera-watched NPCs get mid-band drive slots too.
+// Returns the anchor count.
+unsigned int interestAnchors(GameWorld* gw, float out[INTEREST_ANCHOR_FLOATS]);
 
 // ---- Stage 4 NPC replication primitives ------------------------------------
 

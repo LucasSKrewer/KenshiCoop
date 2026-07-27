@@ -654,7 +654,7 @@ void Replicator::publishNpcCensus(GameWorld* gw, NetLink& net, u32 ownerId) {
     // uses, so a camera-watched far NPC gets a mid-band drive slot too.
     {
         const float MID_NEAR_EDGE = 260.0f; // captureNpcs' NPC_CAPTURE_KEEP
-        float anchors[12];
+        float anchors[engine::INTEREST_ANCHOR_FLOATS];
         unsigned int nAnchor = engine::interestAnchors(gw, anchors);
         midBand_.clear();
         for (unsigned int i = 0; i < n; ++i) {
