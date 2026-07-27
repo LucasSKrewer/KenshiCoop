@@ -43,6 +43,10 @@ param(
     # Measured launch->gameplay on this machine: ~36-42 s. Used with SettleSec to
     # size the per-role self-exit budget so all three clients overlap.
     [int]$LoadSec = 60,
+    # Opt back into the coordinated save/load path (host streams its world to each
+    # join). OFF by default: it is a separate blocker from the relay and currently
+    # fails on the SECOND join. See the comment in Set-ClientEnv.
+    [switch]$CoordinateSaves,
     [switch]$NoKill,
     [switch]$KeepOpen
 )
@@ -184,6 +188,26 @@ function Set-ClientEnv {
     # first run that failed the relay gate for want of evidence. Set it here,
     # after the clear, on every client.
     $env:KENSHICOOP_DEBUG_OWNERS = "1"
+    # ISOLATE THE RELAY FROM THE SaveXfer BLOCKER (-CoordinateSaves to opt back in).
+    #
+    # Measured on the third live run: the host re-bakes its save on every connect
+    # (push-save-on-connect), so its fingerprint MOVES between joins -
+    # hostFp c12a1262 for join1, then fa4f24c0 for join2. Every new join therefore
+    # DIVERGES and demands a full folder transfer. With two clients that is one
+    # transfer; with three the second one collides:
+    #   join2: [save] XFER chunk write-open FAILED (x4)
+    #   join2: [save] XFER-FAILED badCrc=10
+    #   host : [save] XFER-ACK id=2 ok=0
+    # SaveXfer is still ONE global send/receive state machine (the open blocker #4),
+    # so this is expected - and it stops join2 from ever reaching gameplay, which
+    # means the relay gate never gets a chance to observe anything.
+    #
+    # For a RELAY smoke test the save coordination is not under test: give all three
+    # clients an identical save on disk and let each load its own copy.
+    if (-not $CoordinateSaves) {
+        $env:KENSHICOOP_SAVE_SYNC = "0"
+        $env:KENSHICOOP_LOAD_SYNC = "0"
+    }
     $env:KENSHICOOP_MODE         = $Mode
     $env:KENSHICOOP_TRANSPORT    = "udp"
     $env:KENSHICOOP_STEAM_PEER   = "0"
