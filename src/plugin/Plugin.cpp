@@ -329,8 +329,22 @@ void processNetEvents(GameWorld* gw) {
     // peer is swept individually, and the whole-session reset only fires when the
     // last one leaves - which is exactly the old behavior at two players, since
     // there the only peer leaving IS the last one.
+    // OWNER_ID_ALL is NOT an owner id - it is the wildcard the JOIN side pushes when
+    // it loses the HOST (NetLink.cpp, the !isHost_ disconnect branch), meaning
+    // "sweep everything". Treating it as a literal owner made the per-peer path
+    // match nothing and clear NOTHING, which a live three-client run caught:
+    //     [leave] per-peer sweep owner=4294967295 proxies=0 worldProxies=0 driven=0
+    // That regressed upstream's guarantee (any leave = full clear) and left minted
+    // proxies standing with drive maps pointing at bodies that have no authority -
+    // exactly the "join crash -> host follow-on crash" chain this cleanup exists to
+    // prevent. The wildcard must always mean the whole-session reset.
     if (!leaves.empty()) {
-        if (g_session.peers.empty()) {
+        bool sweepAll = false;
+        for (std::deque<coop::u32>::iterator li = leaves.begin(); li != leaves.end(); ++li)
+            if (*li == coop::OWNER_ID_ALL) sweepAll = true;
+        if (sweepAll || g_session.peers.empty()) {
+            g_session.peers.clear();                // wildcard: nobody is left
+            g_peerPresent = false;
             g_repl.clearPeerReplicationState(gw);   // solo again: full reset
         } else {
             for (std::deque<coop::u32>::iterator li = leaves.begin();

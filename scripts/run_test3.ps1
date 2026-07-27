@@ -204,9 +204,16 @@ function Set-ClientEnv {
     #
     # For a RELAY smoke test the save coordination is not under test: give all three
     # clients an identical save on disk and let each load its own copy.
+    #
+    # CAREFUL - only SAVE_SYNC comes off, never LOAD_SYNC. A JOIN does not load the
+    # world on its own: it loads when the host's coordinated LOAD_GO arrives. Turning
+    # LOAD_SYNC off leaves both joins sitting on the MAIN MENU forever (observed on
+    # run 4: "title hook armed" and then nothing), so the relay still gets no chance.
+    # Dropping SAVE_SYNC alone is enough: it stops the host re-baking its save on
+    # every connect, so its fingerprint stays put, MATCHES the identical copies on
+    # disk, and each join loads locally with no transfer.
     if (-not $CoordinateSaves) {
         $env:KENSHICOOP_SAVE_SYNC = "0"
-        $env:KENSHICOOP_LOAD_SYNC = "0"
     }
     $env:KENSHICOOP_MODE         = $Mode
     $env:KENSHICOOP_TRANSPORT    = "udp"
