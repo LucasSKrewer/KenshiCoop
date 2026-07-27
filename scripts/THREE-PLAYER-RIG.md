@@ -70,11 +70,37 @@ scripts\deploy.cmd "G:\KenshiCoop-test\Kenshi-Join2" Harness
 and that the three paths are genuinely distinct) and fails loudly rather than
 producing a run that looks like "the relay does not work".
 
+## Use a TEST save, not a real one
+
+⚠️ Learned the hard way on the first live run. The upstream suite uses **purpose-built
+test saves** — `sync` (52 scenarios), `squad1` (26), `bedcage1`, `camp`, `jailed`,
+`duel1` — not real play saves. `squad1` ships in this repo at `dist\kit\save\squad1`.
+
+The first attempt here pointed at a real, heavily-modded save (Genesis, Dark UI and
+friends) and the HOST **crashed during world load**, ~19 s after reaching in-game:
+
+```
+17.842 RE_Kenshi: In-game.
+36.709 RE_Kenshi: Unhandled Exception Filter called
+Error 36.709 RE_Kenshi: Main crash handler did not pick up exception
+42.926 RE_Kenshi: Attempting emergency save...
+```
+
+Note what that costs you: a crash on load looks exactly like "the N-player changes
+broke something", when the variable that actually changed was the save. Keep the
+save fixed and clean, or an infra failure will be misread as a code failure.
+
+Install the fixture into all three:
+
+```powershell
+robocopy dist\kit\save\squad1 "<install>\save\squad1" /E
+```
+
 ## Running
 
 ```powershell
 $env:KENSHICOOP_DEBUG_OWNERS = "1"
-powershell -ExecutionPolicy Bypass -File scripts\run_test3.ps1 -Save "<a save name>" -Seconds 120
+powershell -ExecutionPolicy Bypass -File scripts\run_test3.ps1 -Save "squad1" -Seconds 120
 ```
 
 Output lands in `out\three_<timestamp>\` (`host.log`, `join1.log`, `join2.log`,
