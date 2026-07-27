@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   THREE-client smoke run: host + two joins on one machine, direct UDP loopback.
 
@@ -40,6 +40,9 @@ param(
     [string]$OutDir = "",
     [int]$StartTimeoutSec = 180,
     [int]$SettleSec = 10,
+    # Measured launch->gameplay on this machine: ~36-42 s. Used with SettleSec to
+    # size the per-role self-exit budget so all three clients overlap.
+    [int]$LoadSec = 60,
     [switch]$NoKill,
     [switch]$KeepOpen
 )
@@ -154,8 +157,33 @@ function Start-PastLauncher {
 # so a divergence cannot be blamed on a stray knob from an earlier run.
 Set-CoopDiagEnv $null | Out-Null
 
+# Per-role self-exit budget. KENSHICOOP_TEST_SECONDS counts from EACH client's own
+# gameplay start, but launches are staggered (serialized loads), so one shared value
+# closes the host's window before the last join is even in the world. Measured on
+# the first three-client run: host gameplay 17:31 and exit 19:31 (120 s), while
+# join2 only started loading at 18:51 - the three were NEVER live together.
+#
+# Giving the earlier clients extra seconds lands all three exits at roughly the same
+# wall clock, so -Seconds means "seconds with all three in the world", which is the
+# only window the relay gate can observe.
+$staggerSec = $SettleSec + $LoadSec
+$budget = @{
+    host  = $Seconds + 2 * $staggerSec
+    join1 = $Seconds + 1 * $staggerSec
+    join2 = $Seconds
+}
+Write-Host ("  self-exit budget: host={0}s join1={1}s join2={2}s (stagger {3}s/client, overlap ~{4}s)" -f `
+            $budget.host, $budget.join1, $budget.join2, $staggerSec, $Seconds)
+
 function Set-ClientEnv {
-    param([string]$Mode, [string]$Log)
+    param([string]$Mode, [string]$Log, [int]$Secs)
+    # KENSHICOOP_DEBUG_OWNERS is REQUIRED by this rig, not optional: the relay gate
+    # has nothing to read without the [owners] tally. It is also a registered
+    # DiagEnv key, which means the hermetic Set-CoopDiagEnv clear above WIPES it -
+    # so setting it in the caller's shell is not enough and silently produced a
+    # first run that failed the relay gate for want of evidence. Set it here,
+    # after the clear, on every client.
+    $env:KENSHICOOP_DEBUG_OWNERS = "1"
     $env:KENSHICOOP_MODE         = $Mode
     $env:KENSHICOOP_TRANSPORT    = "udp"
     $env:KENSHICOOP_STEAM_PEER   = "0"
@@ -163,7 +191,7 @@ function Set-ClientEnv {
     $env:KENSHICOOP_PORT         = "$Port"
     $env:KENSHICOOP_LOG          = $Log
     $env:KENSHICOOP_SAVE         = $Save
-    $env:KENSHICOOP_TEST_SECONDS = "$Seconds"
+    $env:KENSHICOOP_TEST_SECONDS = "$Secs"
     # No compiled scenario: this is a plain "three clients coexist" smoke run.
     $env:KENSHICOOP_SCENARIO     = ""
     $env:KENSHICOOP_SETUP        = ""
@@ -173,7 +201,7 @@ function Set-ClientEnv {
 $pids = [ordered]@{}
 
 Write-Host "Launching HOST ..."
-Set-ClientEnv -Mode "host" -Log $logs.host
+Set-ClientEnv -Mode "host" -Log $logs.host -Secs $budget.host
 $pids.host = Start-PastLauncher -Exe (Join-Path $HostDir "kenshi_x64.exe") -WorkDir $HostDir
 if ($pids.host -eq 0) { throw "Host never got past the launcher." }
 
@@ -185,7 +213,7 @@ foreach ($j in @(@{ n = "join1"; d = $Join1Dir }, @{ n = "join2"; d = $Join2Dir 
     }
     Start-Sleep -Seconds $SettleSec
     Write-Host "Launching $($j.n) ..."
-    Set-ClientEnv -Mode "join" -Log $logs[$j.n]
+    Set-ClientEnv -Mode "join" -Log $logs[$j.n] -Secs $budget[$j.n]
     $pids[$j.n] = Start-PastLauncher -Exe (Join-Path $j.d "kenshi_x64.exe") -WorkDir $j.d
     if ($pids[$j.n] -eq 0) { Write-Warning "$($j.n) failed to get past the launcher; continuing." }
 }
@@ -195,7 +223,7 @@ Write-Host "PIDs: host=$($pids.host) join1=$($pids.join1) join2=$($pids.join2)"
 Write-Host "Running for ~${Seconds}s (each client self-exits via KENSHICOOP_TEST_SECONDS) ..."
 
 # ---- Wait for the clients to self-exit --------------------------------------
-$deadline = (Get-Date).AddSeconds($Seconds + $StartTimeoutSec + 120)
+$deadline = (Get-Date).AddSeconds($budget.host + 2 * $staggerSec + $StartTimeoutSec + 120)
 while ((Get-Date) -lt $deadline) {
     $alive = @(Get-Process -Id ($pids.Values | Where-Object { $_ -ne 0 }) -ErrorAction SilentlyContinue)
     if ($alive.Count -eq 0) { break }
