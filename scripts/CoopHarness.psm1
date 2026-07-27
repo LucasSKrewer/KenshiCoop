@@ -1,4 +1,4 @@
-# CoopHarness.psm1 - shared launch/environment helpers for the KenshiCoop test
+﻿# CoopHarness.psm1 - shared launch/environment helpers for the KenshiCoop test
 # harness. Phase 2 extraction: the per-scenario ENVIRONMENT (channel A/B knobs +
 # log-only diagnostic traces) is now OWNED by the manifest (scripts/scenarios.psd1
 # `DiagEnv` block per scenario) and applied here, so run_test.ps1 and
@@ -52,6 +52,8 @@ $script:CoopDiagEnvKeys = @(
     'KENSHICOOP_JAIL_PROBE'
     'KENSHICOOP_TASK_SPIKE'
     'KENSHICOOP_JAIL_OBSERVE'
+    # N-player experiment: per-authoring-peer driven-body tally (three-player smoke)
+    'KENSHICOOP_DEBUG_OWNERS'
     # --- test-only load-path knob (read in Plugin.cpp, not Config) --------------
     # Forces the join to NACK a MATCHing LOAD_GO so the real folder-transfer path
     # runs on one machine (bootstrap_stream / stream_test.ps1).

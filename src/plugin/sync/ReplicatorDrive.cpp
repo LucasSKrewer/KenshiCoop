@@ -1545,6 +1545,42 @@ void Replicator::pruneDriveGrace(unsigned long now) {
 }
 
 void Replicator::logDriveTelemetry(unsigned long now) {
+    // N-player observation (KENSHICOOP_DEBUG_OWNERS=1): how many driven bodies we
+    // hold PER AUTHORING PEER. Nothing else in the log answers "am I observing
+    // peer X at all" - the [drive] lines carry the hand but not the owner - so
+    // with three clients there was no way to tell a working relay from a silent
+    // one. This is the observation the three-player smoke oracle reads
+    // (scripts/oracles/ThreePlayer.ps1); it gates no behavior.
+    static int ownersDbg = -1;
+    if (ownersDbg < 0) {
+        const char* e = getenv("KENSHICOOP_DEBUG_OWNERS");
+        ownersDbg = (e && e[0] == '1') ? 1 : 0;
+    }
+    if (ownersDbg == 1 && (now - ownersLogTick_) > 3000) {
+        ownersLogTick_ = now;
+        // Fixed-width tally: owner ids are small sequential u32 from the host
+        // (NetLink assigns 0..7 within the ENet peer cap), so a flat array beats
+        // a map allocation on a 3 s diagnostic tick.
+        const unsigned CAP = sync::SeqGuard::MAX_SENDERS;
+        unsigned cnt[CAP]; for (unsigned i = 0; i < CAP; ++i) cnt[i] = 0;
+        unsigned other = 0, total = 0;
+        for (std::map<Key, Driven>::const_iterator it = targets_.begin();
+             it != targets_.end(); ++it) {
+            ++total;
+            if (it->second.ownerId < CAP) ++cnt[it->second.ownerId]; else ++other;
+        }
+        char b[192]; int off = 0;
+        off += _snprintf(b + off, sizeof(b) - off - 1,
+                         "[owners] driven total=%u distinct=", total);
+        unsigned distinct = 0;
+        for (unsigned i = 0; i < CAP; ++i) if (cnt[i]) ++distinct;
+        off += _snprintf(b + off, sizeof(b) - off - 1, "%u byOwner:", distinct);
+        for (unsigned i = 0; i < CAP && off < (int)sizeof(b) - 24; ++i)
+            if (cnt[i])
+                off += _snprintf(b + off, sizeof(b) - off - 1, " %u=%u", i, cnt[i]);
+        if (other) _snprintf(b + off, sizeof(b) - off - 1, " other=%u", other);
+        b[sizeof(b) - 1] = '\0'; coop::logLine(b);
+    }
     if (aiSuspend_ && (now - aiLogTick_) > 3000) {
         aiLogTick_ = now;
         char b[96];

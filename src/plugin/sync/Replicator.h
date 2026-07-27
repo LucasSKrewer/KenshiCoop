@@ -1206,6 +1206,7 @@ private:
     unsigned long combatWrongTgt_;  // hard snaps fired while fighting the WRONG local target
     unsigned long combatLogTick_;
     unsigned long interpLogTick_;
+    unsigned long ownersLogTick_;   // KENSHICOOP_DEBUG_OWNERS per-peer drive tally
 
     // Protocol 36 (wire v35): per-sender clock mapping for the batch send
     // stamp. offsetMs tracks the MINIMUM observed (arrival - sendMs) - the

@@ -29,7 +29,7 @@ Replicator::Replicator()
       walkReissueSquad_(0), walkReissueNpc_(0), restFlipNpc_(0), restFlipMid_(0),
       combatSnapTotal_(0), combatSoftWalk_(0), combatSlide_(0), combatOrder_(0),
       combatWrongTgt_(0), combatLogTick_(0),
-      interpLogTick_(0),
+      interpLogTick_(0), ownersLogTick_(0),
       translateFrames_(0), walkTruthFrames_(0),
       restSampleFrames_(0), marchFrames_(0),
       gateSamples_(0), gateAgree_(0), gateLogTick_(0),
