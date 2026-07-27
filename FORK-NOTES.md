@@ -48,12 +48,28 @@ Branch `experimento-3-jogadores`:
    building / production / research rows are rejected as stale permanently. With
    one sender the new guard is byte-identical to the old predicate (asserted).
 
+4. **Per-peer leave cleanup** (`ReplicatorCore.cpp`, `Plugin.cpp`) — any peer
+   leaving used to run the whole-session `clearPeerReplicationState()`, which with
+   three players wipes the *survivors'* proxies, interp buffers and drive maps too
+   (upstream's own comment: *"Runs once per leave batch (we support a single
+   peer)"*). Now each departed peer is swept individually and the full reset only
+   fires when the last one leaves — identical to upstream at two players, where the
+   departing peer always *is* the last one. Prerequisite fixed along the way:
+   `ingest()` discarded the authoring `ownerId`, so the receiver could not answer
+   "whose driven body is this?"; it is now stamped on `Driven::ownerId`.
+
+   ⚠️ If a 3-player scenario is ever added to the harness, `scripts/oracles/World.ps1`
+   needs to learn the new `[leave] per-peer sweep owner=` line — it currently
+   requires `[leave] cleared proxies=` after a drop, which only the full-reset path
+   emits. Unchanged for every existing (2-player) scenario.
+
 Still not N-ready, and the guard in `NetLink.cpp` still fails loudly past two
-players: `SaveXfer` is one global state machine, several peer fields are singular
-(`peerPresent`, `speedPeerReq_`, `peerCam_`, `pinPeer_`), the peer-leave path
-clears *everyone's* replication state, and the Steam P2P tunnel is single-peer by
-construction on the **host** side — so N players is only reachable over direct
-UDP, not the Steam transport.
+players: `SaveXfer` is one global send/receive state machine, some peer fields are
+still singular (`speedPeerReq_`/`speedPeerCombat_` let two joins overwrite each
+other's speed vote, `peerCam_` is one camera-hint slot, `pinPeer_`/`ownerClassForHand`
+are binary "mine vs THE peer"), and the Steam P2P tunnel is single-peer by
+construction on the **host** side — so N players is only reachable over direct UDP,
+not the Steam transport.
 
 ## Build note
 
