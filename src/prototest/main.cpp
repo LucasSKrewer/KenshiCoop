@@ -31,6 +31,7 @@
 #include "../plugin/core/WorkPose.h"
 #include "../plugin/core/DeathLatch.h"
 #include "../plugin/net/RelayPolicy.h" // N-player host relay classification
+#include "../plugin/sync/SeqGuard.h"   // per-SENDER stale-row guard
 #include "../plugin/core/Inbound.h" // Phase 0 queue-lifecycle fixes (header-only)
 #include "../plugin/game/EngineFaults.h" // Phase 5c: fault throttle (pure inline)
 #include "../plugin/game/EngineCaps.h"   // Phase 5d: capability registry (pure inline)
@@ -1312,6 +1313,107 @@ static void testRelayPolicy() {
     #undef RELAY_NO
 }
 
+// ---- 12c. Per-sender stale-row guard (SeqGuard) ---------------------------------
+// The bug this replaces: rows held ONE scalar seqSeen, so two senders running
+// INDEPENDENT seq counters starved each other - the lower-seq sender's rows were
+// rejected as "stale" forever, because seqSeen only moves up. Wire.h and
+// ChangeGate.h both always SAID "per-sender monotonic"; the storage did not.
+static void testSeqGuard() {
+    std::printf("== per-sender stale-row guard (SeqGuard) ==\n");
+    const u32 A = 1, B = 2;
+
+    // --- The regression itself: independent counters must not starve each other.
+    {
+        coop::sync::SeqGuard g;
+        CHECK("A seq 100 accepted (first sight)", g.accept(A, 100));
+        // Under the old per-ROW scalar this was rejected (5 <= 100) and stayed
+        // rejected forever. B has its own counter and must be judged on its own.
+        CHECK("B seq 5 accepted despite A being at 100", g.accept(B, 5));
+        CHECK("B seq 6 accepted (B advancing)",  g.accept(B, 6));
+        CHECK("A seq 101 accepted (A advancing)", g.accept(A, 101));
+        CHECK("two senders tracked", g.senders() == 2);
+        CHECK("A high-water is 101", g.seqFor(A) == 101);
+        CHECK("B high-water is 6",   g.seqFor(B) == 6);
+    }
+
+    // --- Monotonic per sender: resends/echoes/reorders drop.
+    {
+        coop::sync::SeqGuard g;
+        CHECK("first accepted",            g.accept(A, 10));
+        CHECK("same seq rejected (resend)", !g.accept(A, 10));
+        CHECK("older seq rejected (reorder)", !g.accept(A, 9));
+        CHECK("newer seq accepted",        g.accept(A, 11));
+        CHECK("stamp not moved by a reject", g.seqFor(A) == 11);
+        CHECK("other sender unaffected by A's rejects", g.accept(B, 1));
+    }
+
+    // --- accept() stamps on success (the old two-step invited a missed stamp).
+    {
+        coop::sync::SeqGuard g;
+        CHECK("unseen sender reads 0", g.seqFor(A) == 0);
+        g.accept(A, 42);
+        CHECK("accept stamped without a separate write", g.seqFor(A) == 42);
+    }
+
+    // --- forget(): a rejoining peer restarts its counter LOW and must not be
+    // judged against the dead session's high-water mark.
+    {
+        coop::sync::SeqGuard g;
+        g.accept(A, 500);
+        CHECK("low seq rejected while A is remembered", !g.accept(A, 3));
+        g.forget(A);
+        CHECK("forget dropped the slot", g.senders() == 0);
+        CHECK("rejoin at a low seq accepted", g.accept(A, 3));
+    }
+    {
+        coop::sync::SeqGuard g;
+        g.accept(A, 10); g.accept(B, 20);
+        g.forget(A);
+        CHECK("forget kept the OTHER sender", g.seqFor(B) == 20);
+        CHECK("forget removed only one slot",  g.senders() == 1);
+        g.forget(999); // unknown owner is a no-op, not a corruption
+        CHECK("forget of an unknown owner is a no-op", g.senders() == 1);
+    }
+
+    // --- reset() (session swap) forgets everyone.
+    {
+        coop::sync::SeqGuard g;
+        g.accept(A, 7); g.accept(B, 8);
+        g.reset();
+        CHECK("reset cleared all senders", g.senders() == 0);
+        CHECK("post-reset low seq accepted", g.accept(A, 1));
+    }
+
+    // --- Fail OPEN when the table is full: a duplicate row self-corrects (the
+    // channels are idempotent snapshots), whereas failing closed would freeze a
+    // player's world state - the very bug being fixed. 8 = the ENet peer ceiling,
+    // so this is unreachable in practice.
+    {
+        coop::sync::SeqGuard g;
+        for (u32 i = 1; i <= (u32)coop::sync::SeqGuard::MAX_SENDERS; ++i)
+            g.accept(i, 100);
+        CHECK("table holds MAX_SENDERS", g.senders() == (unsigned)coop::sync::SeqGuard::MAX_SENDERS);
+        CHECK("overflow sender fails OPEN", g.accept(999, 1));
+        CHECK("overflow did not grow the table",
+              g.senders() == (unsigned)coop::sync::SeqGuard::MAX_SENDERS);
+    }
+
+    // --- Matches ChangeGate's original predicate for the single-sender case, so
+    // the validated two-player behavior is byte-identical.
+    {
+        coop::sync::SeqGuard g;
+        u32 scalar = 0;
+        const u32 seqs[6] = { 5, 5, 7, 6, 8, 8 };
+        bool same = true;
+        for (unsigned i = 0; i < 6; ++i) {
+            bool legacy = coop::sync::gateSeqAccept(scalar, seqs[i]);
+            if (legacy) scalar = seqs[i];
+            if (g.accept(A, seqs[i]) != legacy) same = false;
+        }
+        CHECK("single sender matches gateSeqAccept exactly", same);
+    }
+}
+
 // ---- 12. Worker-teardown ordering (models NetLink::stop()) -----------------------
 // The NetLink::stop() fix: ENet teardown (enet_deinitialize + CloseHandle) must
 // happen ONLY after the net worker has fully exited - the worker owns transport
@@ -1590,6 +1692,7 @@ int main() {
     testInboundLifecycle();
     testFlushWorldStateContract();
     testRelayPolicy();
+    testSeqGuard();
     testTeardownOrdering();
     std::printf("\nprototest: %d/%d checks passed%s\n",
                 g_total - g_failed, g_total, g_failed ? " - FAIL" : " - PASS");

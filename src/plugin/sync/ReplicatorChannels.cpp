@@ -683,8 +683,7 @@ void Replicator::applyFactions(const SyncContext& ctx) {
         const FactionPacket& p = it->pkt;
         if (p.sid[0] == '\0') continue;
         FacRow& fr = facRows_[std::string(p.sid)];
-        if (!sync::gateSeqAccept(fr.seqSeen, p.seq)) continue; // stale/dup row
-        fr.seqSeen = p.seq;
+        if (!fr.seqSeen.accept(p.ownerId, p.seq)) continue; // stale/dup row FROM THIS SENDER
         float us = -999.0f, them = -999.0f;
         engine::readRelationBySid(gw, p.sid, &us, &them);
         // Updating the baseline FIRST is the echo guard: the local change this
@@ -774,8 +773,7 @@ void Replicator::applyDoors(const SyncContext& ctx) {
         Key k; k.t = p.hand[0]; k.c = p.hand[1]; k.cs = p.hand[2];
         k.i = p.hand[3]; k.s = p.hand[4];
         DoorRow& dr = doorRows_[k];
-        if (!sync::gateSeqAccept(dr.seqSeen, p.seq)) continue; // stale/dup row
-        dr.seqSeen = p.seq;
+        if (!dr.seqSeen.accept(p.ownerId, p.seq)) continue; // stale/dup row FROM THIS SENDER
         // Updating the baseline FIRST is the echo guard: the local change this
         // write causes must not be re-detected as ours next sample.
         dr.knownOpen = (int)p.open; dr.knownLocked = (int)p.locked;
@@ -901,8 +899,7 @@ void Replicator::applyProd(const SyncContext& ctx) {
         Key wk; wk.t = p.key[0]; wk.c = p.key[1]; wk.cs = p.key[2];
         wk.i = p.key[3]; wk.s = p.key[4];
         ProdRow& pr = prodRows_[std::make_pair((int)p.keyKind, wk)];
-        if (!sync::gateSeqAccept(pr.seqSeen, p.seq)) continue; // stale/dup row
-        pr.seqSeen = p.seq;
+        if (!pr.seqSeen.accept(p.ownerId, p.seq)) continue; // stale/dup row FROM THIS SENDER
         // Resolve the wire key to OUR machine's hand: baked hands resolve
         // directly; a placer key is either a building WE placed (our own
         // hand) or one we MINTED for the host's placement (translation map).
@@ -1034,8 +1031,7 @@ void Replicator::applyResearch(const SyncContext& ctx) {
         sid[sizeof(sid) - 1] = '\0';
         if (!sid[0]) continue;
         ResearchRow& rr = researchRows_[std::string(sid)];
-        if (!sync::gateSeqAccept(rr.seqSeen, p.seq)) continue; // stale/dup row
-        rr.seqSeen = p.seq;
+        if (!rr.seqSeen.accept(p.ownerId, p.seq)) continue; // stale/dup row FROM THIS SENDER
         if (rr.applied) continue; // landed earlier; resends are no-ops
         int known = -1, can = -1;
         int rc = engine::researchQueryBySid(gw, sid, &known, &can);
@@ -1216,8 +1212,7 @@ void Replicator::applyBuilds(const SyncContext& ctx) {
             continue; // mint refused or key unknown - skip silently
         PeerBuild& pb = f->second;
         if (pb.removed) continue; // tombstoned (REMOVE already applied)
-        if (!sync::gateSeqAccept(pb.seqSeen, p.seq)) continue; // stale/dup row
-        pb.seqSeen = p.seq;
+        if (!pb.seqSeen.accept(p.ownerId, p.seq)) continue; // stale/dup row FROM THIS SENDER
         engine::BuildRead cur;
         if (engine::readBuildingByHand(pb.localHand, &cur)) {
             float d = cur.progress - p.progress;
@@ -1488,8 +1483,7 @@ void Replicator::applyBuildDoors(const SyncContext& ctx) {
                 localHand = pit->second.localHand;
         }
         BdoorRow& row = bdoorRows_[std::make_pair(k, (int)p.doorIndex)];
-        if (!sync::gateSeqAccept(row.seqSeen, p.seq)) continue; // stale/dup row
-        row.seqSeen = p.seq;
+        if (!row.seqSeen.accept(p.ownerId, p.seq)) continue; // stale/dup row FROM THIS SENDER
         // Updating the baseline FIRST is the echo guard: the local change this
         // write causes must not be re-detected as ours next sample.
         row.knownOpen = (int)p.open; row.knownLocked = (int)p.locked;

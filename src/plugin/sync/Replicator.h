@@ -28,6 +28,7 @@
 #include "../net/NetLink.h"
 #include "SyncContext.h" // Phase 6: per-tick channel call environment
 #include "SyncTuning.h"  // Phase 6d: owned per-channel send-cadence tunables
+#include "SeqGuard.h"   // per-SENDER stale-row guard (N-player)
 
 class GameWorld;
 class Character;
@@ -1327,8 +1328,8 @@ private:
     // seqSeen    = newest per-sender seq applied (stale-row guard).
     struct FacRow {
         float known; float lastSendVal; unsigned long lastSendMs;
-        u32 seqSeen; bool seeded;
-        FacRow() : known(0), lastSendVal(0), lastSendMs(0), seqSeen(0), seeded(false) {}
+        sync::SeqGuard seqSeen; bool seeded;
+        FacRow() : known(0), lastSendVal(0), lastSendMs(0), seeded(false) {}
     };
     std::map<std::string, FacRow> facRows_;
     u32           facSeqOut_;
@@ -1340,9 +1341,8 @@ private:
     // seqSeen = stale-row guard).
     struct DoorRow {
         int knownOpen; int knownLocked; unsigned long lastSendMs;
-        u32 seqSeen; bool seeded;
-        DoorRow() : knownOpen(-1), knownLocked(-1), lastSendMs(0),
-                    seqSeen(0), seeded(false) {}
+        sync::SeqGuard seqSeen; bool seeded;
+        DoorRow() : knownOpen(-1), knownLocked(-1), lastSendMs(0), seeded(false) {}
     };
     std::map<Key, DoorRow> doorRows_;
     u32           doorSeqOut_;
@@ -1374,9 +1374,9 @@ private:
     };
     struct PeerBuild {
         unsigned int localHand[5];
-        int minted; u32 seqSeen;
+        int minted; sync::SeqGuard seqSeen;
         bool removed; // proxy destroyed on a REMOVE: tombstone (rows skip)
-        PeerBuild() : minted(0), seqSeen(0), removed(false) { memset(localHand, 0, sizeof(localHand)); }
+        PeerBuild() : minted(0), removed(false) { memset(localHand, 0, sizeof(localHand)); }
     };
     std::map<Key, OwnBuild>  ownBuilds_;
     std::map<Key, PeerBuild> peerBuilds_;
@@ -1392,9 +1392,8 @@ private:
     // index) - the protocol-26 DoorRow shape on the translated identity.
     struct BdoorRow {
         int knownOpen; int knownLocked; unsigned long lastSendMs;
-        u32 seqSeen; bool seeded;
-        BdoorRow() : knownOpen(-1), knownLocked(-1), lastSendMs(0),
-                     seqSeen(0), seeded(false) {}
+        sync::SeqGuard seqSeen; bool seeded;
+        BdoorRow() : knownOpen(-1), knownLocked(-1), lastSendMs(0), seeded(false) {}
     };
     std::map<std::pair<Key, int>, BdoorRow> bdoorRows_;
     u32           bdoorSeqOut_;
@@ -1412,10 +1411,10 @@ private:
         int qOut; int qIn0; int qIn1;          // quantized amounts (x100)
         int qGrown; int qDied; int qGrowStart; int qHarv;
         unsigned long lastSendMs;
-        u32 seqSeen; bool sent;
+        sync::SeqGuard seqSeen; bool sent;
         ProdRow() : knownPower(-2), knownState(-2), qOut(-200), qIn0(-200),
                     qIn1(-200), qGrown(-200), qDied(-200), qGrowStart(-200),
-                    qHarv(-200), lastSendMs(0), seqSeen(0), sent(false) {}
+                    qHarv(-200), lastSendMs(0), sent(false) {}
     };
     std::map<std::pair<int, Key>, ProdRow> prodRows_;
     u32           prodSeqOut_;
@@ -1428,10 +1427,10 @@ private:
     // stop re-applying.
     struct ResearchRow {
         unsigned long lastSendMs;
-        u32  seqSeen;
+        sync::SeqGuard seqSeen;
         bool sent;
         bool applied;
-        ResearchRow() : lastSendMs(0), seqSeen(0), sent(false), applied(false) {}
+        ResearchRow() : lastSendMs(0), sent(false), applied(false) {}
     };
     std::map<std::string, ResearchRow> researchRows_;
     u32           researchSeqOut_;
