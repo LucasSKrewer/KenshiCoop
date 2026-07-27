@@ -1,0 +1,6 @@
+[01:32:59.745] [HOST] INFO: [load] starting fallback transfer name='squad1' toPeer=1 stillQueued=0
+[01:33:01.816] [HOST] INFO: [save] XFER-ACK id=1 from=1 ok=1 files=46 bytes=3983331
+[01:33:45.375] [HOST] INFO: [load] starting fallback transfer name='squad1' toPeer=1 stillQueued=0
+[01:33:47.571] [HOST] INFO: [save] XFER-ACK id=2 from=1 ok=1 files=46 bytes=3990407
+[01:33:47.871] [HOST] INFO: [load] starting fallback transfer name='squad1' toPeer=2 stillQueued=0
+[01:33:49.944] [HOST] INFO: [save] XFER-ACK id=3 from=2 ok=1 files=46 bytes=3990407

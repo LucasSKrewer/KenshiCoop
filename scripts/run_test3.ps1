@@ -47,6 +47,12 @@ param(
     # join). OFF by default: it is a separate blocker from the relay and currently
     # fails on the SECOND join. See the comment in Set-ClientEnv.
     [switch]$CoordinateSaves,
+    # Force BOTH joins to demand a real folder transfer even when their fingerprint
+    # MATCHes the host's. Without it join2 usually matches (its save is untouched
+    # until it loads), so the queue is only ever exercised with ONE target and the
+    # multi-peer path - the whole point of the SaveXfer change - goes untested.
+    # Implies -CoordinateSaves.
+    [switch]$ForceStream,
     [switch]$NoKill,
     [switch]$KeepOpen
 )
@@ -188,6 +194,9 @@ function Set-ClientEnv {
     # first run that failed the relay gate for want of evidence. Set it here,
     # after the clear, on every client.
     $env:KENSHICOOP_DEBUG_OWNERS = "1"
+    # Test-only: make a join NACK a MATCHing LOAD_GO so the real transfer runs.
+    if ($ForceStream -and $Mode -eq "join") { $env:KENSHICOOP_FORCE_STREAM = "1" }
+    else                                    { $env:KENSHICOOP_FORCE_STREAM = ""  }
     # ISOLATE THE RELAY FROM THE SaveXfer BLOCKER (-CoordinateSaves to opt back in).
     #
     # Measured on the third live run: the host re-bakes its save on every connect
@@ -212,7 +221,7 @@ function Set-ClientEnv {
     # Dropping SAVE_SYNC alone is enough: it stops the host re-baking its save on
     # every connect, so its fingerprint stays put, MATCHES the identical copies on
     # disk, and each join loads locally with no transfer.
-    if (-not $CoordinateSaves) {
+    if (-not $CoordinateSaves -and -not $ForceStream) {
         # A join NEVER auto-loads its own save while online: Plugin.cpp returns at
         # the title screen because "the host's world is the destination", waiting for
         # the coordinated LOAD_GO. That makes the relay unobservable until SaveXfer

@@ -191,6 +191,15 @@ public:
     // value (Phase 4: myId_ cross-thread safety).
     u32  localId()   const { return (u32)myId_; }
 
+    // SAVE-TRANSFER TARGET (N-player). The save/load BULK packets were broadcast,
+    // which is correct for host + ONE join but wrong with two: every join receives
+    // every other join's transfer and tries to stage it. Transfers are SERIALIZED
+    // (one at a time), so a single "current target" is enough - no per-packet
+    // addressing and no wire change. OWNER_ID_ALL restores the broadcast behavior.
+    // Written by the GAME thread, read by the NET thread (same discipline as myId_).
+    void setSaveTarget(u32 peerId) { InterlockedExchange(&saveTarget_, (LONG)peerId); }
+    u32  saveTarget() const        { return (u32)saveTarget_; }
+
 private:
     static DWORD WINAPI threadEntry(LPVOID self);
     void threadLoop();
@@ -298,6 +307,8 @@ private:
     // Written by the NET thread on WELCOME (InterlockedExchange) and read on the
     // MAIN thread via localId(); volatile LONG so the read is atomic + uncached.
     volatile LONG myId_;
+    void sendToSaveTarget(ENetPacket* out, unsigned char channel);
+    volatile LONG saveTarget_;  // peer the in-flight save transfer is for
 
     // Session epoch (protocol 44). sendEpoch_ is bumped by the MAIN thread
     // (InterlockedIncrement in bumpSessionEpoch) and read by the NET thread when

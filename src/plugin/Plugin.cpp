@@ -100,6 +100,13 @@ struct SessionController {
     std::set<coop::u32> peers;     // ids of the peers currently connected
     // Coordinated save (protocol 31).
     std::string  savePending;      // host: save name awaiting quiescence
+    // N-player: which peers still need the save streamed, and the name they need.
+    // This was a single std::string, so with two joins NACKing the same load the
+    // second peer's need was simply overwritten and then CLEARED when the first
+    // transfer started - it never got its world. Transfers stay SERIALIZED (one in
+    // flight); this is the backlog that feeds the next one.
+    std::deque<coop::u32> xferPeers;   // peers awaiting a transfer, in NACK order
+    std::string           xferName;    // the save they are waiting for
     coop::u32    saveReqId;        // join: monotonic PKT_SAVE_REQ counter
     // Push-save-on-connect bootstrap (host): when a peer connects the host bakes
     // a fresh save of its live world and, once the folder quiesces, sends the
@@ -155,6 +162,8 @@ coop::u32&   g_loadIdOut       = g_session.loadIdOut;
 coop::u32&   g_loadIdSeen      = g_session.loadIdSeen;
 coop::u32&   g_loadReqId       = g_session.loadReqId;
 std::string& g_loadXferPending = g_session.loadXferPending;
+std::deque<coop::u32>& g_xferPeers = g_session.xferPeers;
+std::string&           g_xferName  = g_session.xferName;
 std::string& g_loadAfterCommit = g_session.loadAfterCommit;
 coop::u32&   g_loadCommitBase  = g_session.loadCommitBase;
 DWORD&       g_loadPumpArmTick  = g_session.loadPumpArmTick;
@@ -492,7 +501,11 @@ void driveSaveSync() {
                     g_bootstrapName.clear();
                     g_savePending.clear();
                 } else if (g_peerPresent)
-                    coop::savexfer::beginSend(g_net, g_net.localId(), g_savePending);
+                    // Push-save-on-connect: this one goes to EVERY peer (they all
+                    // need the freshly baked world), so it keeps the broadcast
+                    // behavior via the OWNER_ID_ALL sentinel.
+                    coop::savexfer::beginSend(g_net, g_net.localId(), g_savePending,
+                                              coop::OWNER_ID_ALL);
                 else
                     coopLog("[save] no peer connected; transfer skipped");
             }
@@ -506,13 +519,22 @@ void driveSaveSync() {
         g_inbound.drainSaveAcks(acks);
         for (std::deque<coop::InboundSaveAck>::iterator it = acks.begin();
              it != acks.end(); ++it) {
-            char b[144];
+            // from= is load-bearing with more than one join: an ACK used to be
+            // anonymous, so a failing one could not be attributed to a peer. A
+            // three-client run produced TWO acks for the same xferId (ok=1 then
+            // ok=0 files=0), and the log could not say whether the second came from
+            // the peer that was actually served or from one that never received a
+            // byte - which decides whether it means anything at all.
+            char b[176];
             _snprintf(b, sizeof(b) - 1,
-                      "[save] XFER-ACK id=%u ok=%u files=%u bytes=%I64u",
-                      it->pkt.xferId, (unsigned)it->pkt.ok,
+                      "[save] XFER-ACK id=%u from=%u ok=%u files=%u bytes=%I64u",
+                      it->pkt.xferId, (unsigned)it->ownerId, (unsigned)it->pkt.ok,
                       (unsigned)it->pkt.files, it->pkt.bytes);
             b[sizeof(b) - 1] = '\0';
             if (it->pkt.ok) coopLog(b); else coopErr(b);
+            // Only the peer this transfer was FOR can settle it. Without this an
+            // unrelated peer's stale/empty ack would clear g_lastAckXferId and make
+            // the served peer's real result unreadable.
             coop::savexfer::noteAck(it->pkt.xferId, it->pkt.ok ? 1 : 0);
         }
     } else {
@@ -634,17 +656,31 @@ void driveLoadSync(GameWorld* gw) {
                       "[load] NACK id=%u name='%s' joinFp=%08x -> transfer after reload",
                       it->pkt.loadId, name, it->pkt.fingerprint);
             b[sizeof(b) - 1] = '\0'; coopLog(b);
-            g_loadXferPending = name;
+            // Remember WHO asked. The old code kept only the name, so a second
+            // join NACKing the same load was indistinguishable from the first and
+            // its transfer never happened.
+            g_xferName = name;
+            bool already = false;
+            for (std::deque<coop::u32>::iterator q = g_xferPeers.begin();
+                 q != g_xferPeers.end(); ++q)
+                if (*q == it->ownerId) { already = true; break; }
+            if (!already) g_xferPeers.push_back(it->ownerId);
+            g_loadXferPending = name;   // kept: other code reads it as "a transfer is owed"
         }
-        if (!g_loadXferPending.empty() && coop::engine::gameplayLive(gw) &&
-            !coop::savexfer::sending()) {
-            char b[144];
+        // Serve ONE peer at a time; the rest stay queued and are served as each
+        // transfer completes (savexfer::sending() drops back to false).
+        if (!g_xferPeers.empty() && !g_xferName.empty() &&
+            coop::engine::gameplayLive(gw) && !coop::savexfer::sending()) {
+            const coop::u32 toPeer = g_xferPeers.front();
+            g_xferPeers.pop_front();
+            char b[176];
             _snprintf(b, sizeof(b) - 1,
-                      "[load] starting fallback transfer name='%s'",
-                      g_loadXferPending.c_str());
+                      "[load] starting fallback transfer name='%s' toPeer=%u stillQueued=%u",
+                      g_xferName.c_str(), (unsigned)toPeer,
+                      (unsigned)g_xferPeers.size());
             b[sizeof(b) - 1] = '\0'; coopLog(b);
-            coop::savexfer::beginSend(g_net, g_net.localId(), g_loadXferPending);
-            g_loadXferPending.clear();
+            coop::savexfer::beginSend(g_net, g_net.localId(), g_xferName, toPeer);
+            if (g_xferPeers.empty()) g_loadXferPending.clear();
         }
         // The chunk pump normally lives in driveSaveSync; keep the fallback
         // transfer moving even when saveSync is gated off.

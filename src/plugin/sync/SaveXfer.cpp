@@ -393,7 +393,9 @@ int tickWatch(unsigned int* outFiles, unsigned __int64* outBytes,
 // ---- Sender (host) -------------------------------------------------------------
 #ifndef KENSHICOOP_PROTOTEST
 
-bool beginSend(NetLink& net, u32 localId, const std::string& name) {
+bool beginSend(NetLink& net, u32 localId, const std::string& name, u32 toPeer) {
+    // Arm the addressed send BEFORE any packet is queued.
+    net.setSaveTarget(toPeer);
     sendCloseFile();
     g_sendFiles.clear();
     g_sendCrcs.clear();
@@ -520,6 +522,16 @@ bool tickSend(NetLink& net, u32 localId) {
         g_lastSentXferId = g_sendXferId;
         g_sendActive = false;
         g_sendFiles.clear();
+        // DO NOT disarm the target here. queueSaveDone() only ENQUEUES; the net
+        // thread flushes it later, so clearing the target on this line raced the
+        // flush and the DONE went out BROADCAST. Live evidence of that race, with
+        // both peers acking transfers that were never addressed to them:
+        //     XFER-ACK id=2 from=2 ok=0 files=0   (id=2 was sent toPeer=1)
+        //     XFER-ACK id=3 from=1 ok=0 files=0   (id=3 was sent toPeer=2)
+        // and join2 ending in XFER-FAILED. The target stays armed until the next
+        // beginSend() re-arms it, which is safe because every save packet is
+        // queued from inside a beginSend()-armed transfer - and the one path that
+        // must reach everyone (push-save-on-connect) passes OWNER_ID_ALL itself.
         return true;
     }
     return false;

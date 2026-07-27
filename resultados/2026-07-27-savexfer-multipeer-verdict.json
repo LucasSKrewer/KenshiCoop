@@ -1,0 +1,115 @@
+﻿{
+    "verdict":  "PASS",
+    "gates":  [
+                  {
+                      "name":  "log_host",
+                      "result":  "PASS",
+                      "detail":  "323 lines"
+                  },
+                  {
+                      "name":  "gameplay_host",
+                      "result":  "PASS",
+                      "detail":  "reached gameplay"
+                  },
+                  {
+                      "name":  "log_join1",
+                      "result":  "PASS",
+                      "detail":  "733 lines"
+                  },
+                  {
+                      "name":  "gameplay_join1",
+                      "result":  "PASS",
+                      "detail":  "reached gameplay"
+                  },
+                  {
+                      "name":  "log_join2",
+                      "result":  "PASS",
+                      "detail":  "359 lines"
+                  },
+                  {
+                      "name":  "gameplay_join2",
+                      "result":  "PASS",
+                      "detail":  "reached gameplay"
+                  },
+                  {
+                      "name":  "nocrash_host",
+                      "result":  "PASS",
+                      "detail":  "clean"
+                  },
+                  {
+                      "name":  "nocrash_join1",
+                      "result":  "PASS",
+                      "detail":  "clean"
+                  },
+                  {
+                      "name":  "nocrash_join2",
+                      "result":  "PASS",
+                      "detail":  "clean"
+                  },
+                  {
+                      "name":  "third_admitted",
+                      "result":  "PASS",
+                      "detail":  "host logged the 3+ guard 1 time(s) (expected \u003e= 1)"
+                  },
+                  {
+                      "name":  "host_saw_two_peers",
+                      "result":  "PASS",
+                      "detail":  "host saw peer ids: 1,2"
+                  },
+                  {
+                      "name":  "relay_join1",
+                      "result":  "PASS",
+                      "detail":  "drove bodies from owner(s) [0,2], total=13, 21 sample(s) - need \u003e= 2 distinct owners (host + the other join)"
+                  },
+                  {
+                      "name":  "relay_join2",
+                      "result":  "PASS",
+                      "detail":  "drove bodies from owner(s) [0,1], total=16, 10 sample(s) - need \u003e= 2 distinct owners (host + the other join)"
+                  },
+                  {
+                      "name":  "host_drove_both",
+                      "result":  "PASS",
+                      "detail":  "host drove bodies from owner(s) [1,2], total=1, 42 sample(s)"
+                  }
+              ],
+    "why":  [
+
+            ],
+    "tally":  {
+                  "host":  {
+                               "samples":  42,
+                               "owners":  {
+                                              "1":  1
+                                          },
+                               "total":  1,
+                               "everOwners":  {
+                                                  "2":  true,
+                                                  "1":  true
+                                              }
+                           },
+                  "join1":  {
+                                "samples":  21,
+                                "owners":  {
+                                               "2":  1,
+                                               "0":  12
+                                           },
+                                "total":  13,
+                                "everOwners":  {
+                                                   "2":  true,
+                                                   "0":  true
+                                               }
+                            },
+                  "join2":  {
+                                "samples":  10,
+                                "owners":  {
+                                               "1":  1,
+                                               "0":  15
+                                           },
+                                "total":  16,
+                                "everOwners":  {
+                                                   "1":  true,
+                                                   "0":  true
+                                               }
+                            }
+              }
+}

@@ -83,7 +83,12 @@ int tickWatch(unsigned int* outFiles, unsigned __int64* outBytes,
 // Snapshot save 'name' and queue the BEGIN. Returns false when the folder is
 // missing/empty (nothing is queued). One transfer at a time; a re-begin
 // abandons the previous one (the join drops stale xferIds).
-bool beginSend(NetLink& net, u32 localId, const std::string& name);
+// toPeer: the peer this transfer is FOR. Transfers are serialized (one in flight),
+// so NetLink keeps a single current target and the BULK packets are addressed to it
+// instead of broadcast - with two joins, broadcasting means each one stages the
+// other's transfer over its own save. OWNER_ID_ALL keeps the old broadcast
+// behavior for a single-join session.
+bool beginSend(NetLink& net, u32 localId, const std::string& name, u32 toPeer);
 bool sending();
 // Pump the active transfer (call every main-loop tick; internally throttled).
 // Logs "[save] XFER-SENT ..." and returns true on the tick the DONE goes out.

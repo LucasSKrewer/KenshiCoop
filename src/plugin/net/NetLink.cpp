@@ -84,6 +84,7 @@ NetLink::NetLink()
       enetHost_(0), serverPeer_(0), inbound_(0),
       outOwner_(0), outStampMs_(0), haveOut_(false),
       thread_(0), running_(0), stopFlag_(0), myId_(0),
+      saveTarget_((LONG)OWNER_ID_ALL),
       sendEpoch_(0),
       steamPeer_(0),
       simDelayMs_(0), simJitterMs_(0), simLossPct_(0) {
@@ -234,6 +235,35 @@ void NetLink::queueInvXfer(const InvXferPacket& pkt) { pushLocked(outCs_, outInv
 void NetLink::queueSaveReq(const SaveReqPacket& pkt) { pushLocked(outCs_, outSaveReq_, pkt); }
 
 void NetLink::queueSaveBegin(const SaveBeginPacket& pkt) { pushLocked(outCs_, outSaveBegin_, pkt); }
+
+// Send a host->join BULK packet to the CURRENT save target instead of everyone.
+// Broadcasting the transfer is right for host + ONE join and wrong with two: the
+// other join receives chunks for a transfer it never asked for and stages them
+// over its own save (observed live: "XFER chunk write-open FAILED" + badCrc on the
+// second join). saveTarget_ is OWNER_ID_ALL until a transfer is armed, so the
+// two-player path is untouched. Falls back to broadcast if the target vanished
+// (peer dropped mid-transfer) so the packet is never leaked.
+void NetLink::sendToSaveTarget(ENetPacket* out, unsigned char channel) {
+    const u32 target = saveTarget();
+    if (target != OWNER_ID_ALL) {
+        if (enetHost_) {
+            for (size_t i = 0; i < enetHost_->peerCount; ++i) {
+                ENetPeer* p = &enetHost_->peers[i];
+                if (p->state != ENET_PEER_STATE_CONNECTED) continue;
+                if ((u32)(size_t)p->data != target) continue;
+                enet_peer_send(p, channel, out);
+                return;
+            }
+        }
+        // Target gone (peer dropped mid-transfer): DROP, never fall back to
+        // broadcast. The transfer is dead either way, and broadcasting its
+        // remaining chunks would make every OTHER join stage a transfer it never
+        // asked for - the exact failure this addressing exists to stop.
+        enet_packet_destroy(out);
+        return;
+    }
+    enet_host_broadcast(enetHost_, channel, out);
+}
 
 void NetLink::queueSaveFile(const SaveFileHeader& hdr, const char* relPath,
                             const unsigned char* data, unsigned int dataLen) {
@@ -1550,7 +1580,7 @@ void NetLink::threadLoop() {
             ENetPacket* out = enet_packet_create(&saveBegins[i], sizeof(SaveBeginPacket),
                                                  ENET_PACKET_FLAG_RELIABLE);
             if (isHost_) {
-                enet_host_broadcast(enetHost_, CH_BULK, out);
+                sendToSaveTarget(out, CH_BULK);
             } else if (serverPeer_ && serverPeer_->state == ENET_PEER_STATE_CONNECTED) {
                 enet_peer_send(serverPeer_, CH_BULK, out);
             } else {
@@ -1565,7 +1595,7 @@ void NetLink::threadLoop() {
                 std::memcpy(out->data + sizeof(SaveFileHeader), &saveFiles[i].tail[0],
                             saveFiles[i].tail.size());
             if (isHost_) {
-                enet_host_broadcast(enetHost_, CH_BULK, out);
+                sendToSaveTarget(out, CH_BULK);
             } else if (serverPeer_ && serverPeer_->state == ENET_PEER_STATE_CONNECTED) {
                 enet_peer_send(serverPeer_, CH_BULK, out);
             } else {
@@ -1581,7 +1611,7 @@ void NetLink::threadLoop() {
                 std::memcpy(out->data + sizeof(SaveDoneHeader), &saveDones[i].crcs[0],
                             saveDones[i].crcs.size() * sizeof(u32));
             if (isHost_) {
-                enet_host_broadcast(enetHost_, CH_BULK, out);
+                sendToSaveTarget(out, CH_BULK);
             } else if (serverPeer_ && serverPeer_->state == ENET_PEER_STATE_CONNECTED) {
                 enet_peer_send(serverPeer_, CH_BULK, out);
             } else {
