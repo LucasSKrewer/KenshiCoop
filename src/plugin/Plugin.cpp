@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <string>
 #include <deque>
+#include <set>
 
 #include "CoopLog.h"
 #include "core/Config.h"
@@ -91,7 +92,12 @@ struct SessionController {
     DWORD        gameStartTick;    // GetTickCount at the gameplay-start edge
     bool         autoLoadDone;     // title auto-load fired (settle gate)
     DWORD        titleFirstTick;   // first title tick (settle gate base)
-    bool         peerPresent;      // a peer is connected right now
+    bool         peerPresent;      // ANY peer is connected right now (derived from
+                                   //   peers below; every reader means exactly that)
+    // N-player: peerPresent alone cannot answer "how many are left?", which the
+    // leave path needs - one of three peers leaving must sweep only ITS state,
+    // while the LAST one leaving is a full session reset (back to solo).
+    std::set<coop::u32> peers;     // ids of the peers currently connected
     // Coordinated save (protocol 31).
     std::string  savePending;      // host: save name awaiting quiescence
     coop::u32    saveReqId;        // join: monotonic PKT_SAVE_REQ counter
@@ -218,6 +224,7 @@ void warnIfNoPortraits(const std::string& name) {
 // clearing the maps - else a reconnect leaves orphaned duplicates or bakes them
 // into the next save. Falls back to a plain map reset if no world has ticked yet.
 void sessionResetForUi() {
+    g_session.peers.clear();
     g_peerPresent = false;
     if (g_lastGw) g_repl.clearPeerReplicationState(g_lastGw);
     else          g_repl.resetSession();
@@ -277,7 +284,8 @@ void processNetEvents(GameWorld* gw) {
         // per-channel safety resends (or never minting a pre-connect build).
         if (g_cfg.latejoinSync) g_repl.onPeerConnected(g_net, g_net.localId());
         else coopLog("[latejoin] connect edge seen, resync OFF (gate)");
-        g_peerPresent = true;
+        g_session.peers.insert(*it);
+        g_peerPresent = !g_session.peers.empty();
         // Coordinated save (protocol 31): while connected under save-sync,
         // the JOIN never writes a save locally - the host's save is
         // authoritative and a local save press forwards as PKT_SAVE_REQ.
@@ -301,7 +309,8 @@ void processNetEvents(GameWorld* gw) {
         // the departed peer's stream will never author its drop/exit edges -
         // release any carry or occupancy its driven copies still hold.
         if (gw && (g_cfg.carrySync || g_cfg.furnSync)) g_repl.sweepCarries(gw);
-        g_peerPresent = false;
+        g_session.peers.erase(*it);
+        g_peerPresent = !g_session.peers.empty();
         // Coordinated save: disconnected = solo again; local saves must work.
         if (!g_cfg.isHost && g_cfg.saveSync) {
             coop::engine::setSaveSuppress(false);
@@ -312,10 +321,22 @@ void processNetEvents(GameWorld* gw) {
     // standing AND its drive maps pointing at bodies with no fresh authority
     // (the engine will eventually reap them, and the next drive touches a freed
     // pointer - the "join crash -> host follow-on crash" chain). Despawn the
-    // minted proxies and clear the peer maps, mirroring coopUiDisconnect(). Runs
-    // once per leave batch (we support a single peer).
+    // minted proxies and clear the peer maps, mirroring coopUiDisconnect().
+    //
+    // N-player: this used to be ONE global clearPeerReplicationState() per leave
+    // batch ("we support a single peer"), which with three players would wipe the
+    // SURVIVORS' proxies, interp buffers and drive maps as well. Now each departed
+    // peer is swept individually, and the whole-session reset only fires when the
+    // last one leaves - which is exactly the old behavior at two players, since
+    // there the only peer leaving IS the last one.
     if (!leaves.empty()) {
-        g_repl.clearPeerReplicationState(gw);
+        if (g_session.peers.empty()) {
+            g_repl.clearPeerReplicationState(gw);   // solo again: full reset
+        } else {
+            for (std::deque<coop::u32>::iterator li = leaves.begin();
+                 li != leaves.end(); ++li)
+                g_repl.clearOnePeerReplicationState(gw, *li);
+        }
         g_inbound.flushWorldState();
     }
 }

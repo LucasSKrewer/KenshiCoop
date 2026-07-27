@@ -304,6 +304,77 @@ void Replicator::clearPeerReplicationState(GameWorld* gw) {
     resetSession();
 }
 
+void Replicator::clearOnePeerReplicationState(GameWorld* gw, u32 ownerId) {
+    // Same hazard as the full clear - a proxy left standing after its author is
+    // gone is a permanent ghost, and any map still pointing at it drives a body
+    // with no fresh authority (or a freed pointer once the engine reaps it) - but
+    // scoped to ONE sender so the other peers keep replicating. Despawn before
+    // erasing, because the map owns the pointers.
+    unsigned int cleared = 0, wcleared = 0, dropped = 0;
+
+    // Minted proxies this peer authored. Ownership comes from the driven entry for
+    // the same hand (Driven::ownerId, stamped at ingest); a proxy whose driven
+    // entry is already gone cannot be attributed, so it is LEFT ALONE here - the
+    // periodic proxy sweep and the eventual full clear still reap it, whereas
+    // guessing could despawn a body another peer is driving.
+    for (std::map<Key, Character*>::iterator it = proxyByKey_.begin();
+         it != proxyByKey_.end(); ) {
+        std::map<Key, Driven>::iterator d = targets_.find(it->first);
+        if (d == targets_.end() || d->second.ownerId != ownerId) { ++it; continue; }
+        if (gw && it->second && engine::despawnProxyNpc(gw, it->second))
+            ++cleared;
+        std::map<Key, Character*>::iterator dead = it++;
+        proxyByKey_.erase(dead);
+    }
+
+    // World-item proxies: already keyed (ownerId, netId), so this is exact.
+    for (std::map<std::pair<u32, u32>, WorldProxy>::iterator wi = worldProxies_.begin();
+         wi != worldProxies_.end(); ) {
+        if (wi->first.first != ownerId) { ++wi; continue; }
+        if (gw && wi->second.obj && engine::removeWorldItemProxy(gw, wi->second.obj))
+            ++wcleared;
+        std::map<std::pair<u32, u32>, WorldProxy>::iterator dead = wi++;
+        worldProxies_.erase(dead);
+    }
+
+    // Driven bodies + interp buffers authored by this peer.
+    for (std::map<Key, Driven>::iterator ti = targets_.begin(); ti != targets_.end(); ) {
+        if (ti->second.ownerId != ownerId) { ++ti; continue; }
+        std::map<Key, Driven>::iterator dead = ti++;
+        targets_.erase(dead);
+        ++dropped;
+    }
+
+    // Its slot in every per-row seq guard: a rejoin restarts the counter low and
+    // must not be judged against this session's high-water mark (SeqGuard.h).
+    for (std::map<std::string, FacRow>::iterator i = facRows_.begin(); i != facRows_.end(); ++i)
+        i->second.seqSeen.forget(ownerId);
+    for (std::map<Key, DoorRow>::iterator i = doorRows_.begin(); i != doorRows_.end(); ++i)
+        i->second.seqSeen.forget(ownerId);
+    for (std::map<std::pair<Key, int>, BdoorRow>::iterator i = bdoorRows_.begin();
+         i != bdoorRows_.end(); ++i)
+        i->second.seqSeen.forget(ownerId);
+    for (std::map<std::pair<int, Key>, ProdRow>::iterator i = prodRows_.begin();
+         i != prodRows_.end(); ++i)
+        i->second.seqSeen.forget(ownerId);
+    for (std::map<std::string, ResearchRow>::iterator i = researchRows_.begin();
+         i != researchRows_.end(); ++i)
+        i->second.seqSeen.forget(ownerId);
+    for (std::map<Key, PeerBuild>::iterator i = peerBuilds_.begin(); i != peerBuilds_.end(); ++i)
+        i->second.seqSeen.forget(ownerId);
+
+    // Its clock mapping: a reconnect renegotiates from scratch rather than
+    // inheriting an offset learned on the dead session's route.
+    peerClock_.erase(ownerId);
+
+    char b[144];
+    _snprintf(b, sizeof(b) - 1,
+              "[leave] per-peer sweep owner=%u proxies=%u worldProxies=%u driven=%u",
+              (unsigned)ownerId, cleared, wcleared, dropped);
+    b[sizeof(b) - 1] = '\0';
+    coop::logLine(b);
+}
+
 void Replicator::ingest(Inbound& in) {
     std::deque<InboundEntity> got;
     in.drainEntities(got);
@@ -334,6 +405,9 @@ void Replicator::ingest(Inbound& in) {
             if ((long)(t - now) > 0) t = now;
         }
         Driven& d = targets_[keyOf(it->e)];
+        // Remember WHO authors this body, so a peer leaving can be swept per-peer
+        // instead of clearing everyone's replication state.
+        d.ownerId = it->ownerId;
         d.interp.push(it->e, t, now);
         d.lastSeenMs = now;
     }

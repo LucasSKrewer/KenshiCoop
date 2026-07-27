@@ -563,6 +563,24 @@ public:
     // session re-censuses and re-mints from scratch.
     void clearPeerReplicationState(GameWorld* gw);
 
+    // Per-peer variant (N-player): sweep ONLY the state one departed peer authored,
+    // leaving every other peer's replication intact. The full clear above is a
+    // whole-session reset - correct when the LAST peer leaves (back to solo), a
+    // catastrophe with three players, where one leaving would wipe the survivors'
+    // proxies, interp buffers and drive maps too.
+    //
+    // Scope is deliberately narrow: only state ATTRIBUTABLE to one sender.
+    //   - minted proxy bodies it authored (proxyByKey_, via Driven::ownerId)
+    //   - its world-item proxies (worldProxies_ is already keyed (ownerId, netId))
+    //   - its driven bodies / interp buffers (targets_)
+    //   - its slot in every per-row seq guard, so a REJOIN restarting its counter
+    //     low is not judged against the dead session's high-water mark
+    //   - its clock mapping (peerClock_)
+    // Shared WORLD baselines (faction/door/production/research row values, the
+    // world-item baseline, ...) are NOT touched: they describe the world, which
+    // outlives any one peer.
+    void clearOnePeerReplicationState(GameWorld* gw, u32 ownerId);
+
     // AFTER engine: sample + apply the interpolated pose for every tracked entity.
     void applyTargets(GameWorld* gw);
 
@@ -669,6 +687,11 @@ private:
 
     struct Driven {
         EntityInterp interp;
+        // AUTHOR of this driven body (the peer whose stream owns it). Previously
+        // dropped on ingest, which left the receiver unable to answer "whose body
+        // is this?" - so peer-leave cleanup had to sweep EVERY driven body, and a
+        // third player leaving would wipe the others' replication too.
+        u32          ownerId;
         bool         fresh;          // host streamed a non-stale sample this tick
         bool         haveActual;     // lx/ly/lz hold a valid previous actual pos
         float        lx, ly, lz;     // last actual (rendered) position
@@ -772,7 +795,7 @@ private:
         // accrued under sparse mid coverage - classed to the mid ledger
         // (like young-ring coverage snaps), not steady-state near tracking.
         unsigned long midSeenMs;
-        Driven() : fresh(false), haveActual(false), lx(0), ly(0), lz(0), parked(false),
+        Driven() : ownerId(0), fresh(false), haveActual(false), lx(0), ly(0), lz(0), parked(false),
                    haveDest(false), dx(0), dy(0), dz(0),
                    suppressed(false), lastSeenMs(0),
                    issuedTask(TASK_NONE), taskApplied(false), taskBad(false),
