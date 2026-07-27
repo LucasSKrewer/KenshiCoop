@@ -32,6 +32,7 @@
 #include "../plugin/core/DeathLatch.h"
 #include "../plugin/net/RelayPolicy.h" // N-player host relay classification
 #include "../plugin/sync/SeqGuard.h"   // per-SENDER stale-row guard
+#include "../plugin/sync/SpeedArbiter.h" // consensus game-speed rule
 #include "../plugin/core/Inbound.h" // Phase 0 queue-lifecycle fixes (header-only)
 #include "../plugin/game/EngineFaults.h" // Phase 5c: fault throttle (pure inline)
 #include "../plugin/game/EngineCaps.h"   // Phase 5d: capability registry (pure inline)
@@ -1414,6 +1415,80 @@ static void testSeqGuard() {
     }
 }
 
+// ---- 12d. Consensus game-speed arbitration (SpeedArbiter) -----------------------
+// The rule players FEEL. min() over every vote: anyone may pause or slow down,
+// EVERYONE must agree to raise; combat caps at 1x but never unpauses. Upstream
+// computed this inline over one speedPeerReq_ scalar, so a second join's vote
+// simply overwrote the first's - "consensus" became "whoever spoke last".
+static void testSpeedArbiter() {
+    std::printf("== consensus game-speed arbitration (SpeedArbiter) ==\n");
+    typedef coop::sync::SpeedArbiter Arb;
+
+    // A lone raise must NOT pass - this is the oracle's "denied raise" gate.
+    { Arb a(3.0f, false); a.addPeer(1.0f, false);
+      CHECK("lone raiser denied (min wins)", a.effective() == 1.0f); }
+    // ...and a unanimous raise must.
+    { Arb a(3.0f, false); a.addPeer(3.0f, false);
+      CHECK("unanimous raise passes", a.effective() == 3.0f); }
+
+    // THE N-PLAYER REGRESSION: with three players, one hold-out is enough.
+    { Arb a(3.0f, false); a.addPeer(3.0f, false); a.addPeer(1.0f, false);
+      CHECK("one hold-out of three blocks the raise", a.effective() == 1.0f); }
+    { Arb a(3.0f, false); a.addPeer(3.0f, false); a.addPeer(3.0f, false);
+      CHECK("all three agreeing raises", a.effective() == 3.0f); }
+
+    // Pause is just 0, so min() gives "anyone can pause".
+    { Arb a(3.0f, false); a.addPeer(0.0f, false);
+      CHECK("any peer pausing pauses everyone", a.effective() == 0.0f); }
+    { Arb a(0.0f, false); a.addPeer(3.0f, false); a.addPeer(3.0f, false);
+      CHECK("my pause beats two peers raising", a.effective() == 0.0f); }
+
+    // Combat caps at 1x - from ANY participant - and must never force an unpause.
+    { Arb a(3.0f, true);  CHECK("own combat caps at 1x", a.effective() == 1.0f); }
+    { Arb a(3.0f, false); a.addPeer(3.0f, true);
+      CHECK("a peer's combat caps everyone at 1x", a.effective() == 1.0f); }
+    { Arb a(3.0f, false); a.addPeer(3.0f, false); a.addPeer(2.0f, true);
+      CHECK("combat cap applies after min", a.effective() == 1.0f); }
+    { Arb a(0.0f, true);  CHECK("combat cap never unpauses", a.effective() == 0.0f); }
+    { Arb a(0.0f, false); a.addPeer(3.0f, true);
+      CHECK("peer combat never unpauses a paused vote", a.effective() == 0.0f); }
+    // A peer flagging combat counts even before it has cast a vote.
+    { Arb a(3.0f, false); a.addPeer(-1.0f, true);
+      CHECK("peer combat counts with no vote yet", a.effective() == 1.0f);
+      CHECK("combat flag surfaces", a.combat()); }
+
+    // Sub-1x is NOT raised by the combat cap (it caps, it does not clamp up).
+    { Arb a(0.25f, true); CHECK("combat does not raise a slow vote", a.effective() == 0.25f); }
+
+    // No vote yet (-1) means 1x, and never drags the minimum down.
+    { Arb a(-1.0f, false); CHECK("my missing vote reads as 1x", a.effective() == 1.0f); }
+    { Arb a(3.0f, false); a.addPeer(-1.0f, false);
+      CHECK("a peer's missing vote does not block", a.effective() == 3.0f);
+      CHECK("minPeer stays -1 with no peer vote", a.minPeer() == -1.0f); }
+    { Arb a(3.0f, false); a.addPeer(2.0f, false); a.addPeer(1.5f, false);
+      CHECK("minPeer reports the lowest peer vote", a.minPeer() == 1.5f); }
+
+    // Single peer must be BYTE-IDENTICAL to upstream's inline formula, so the
+    // validated two-player speed_sync behavior cannot have shifted.
+    {
+        const float mine[4]  = { 3.0f, 1.0f, 0.0f, -1.0f };
+        const float peers[4] = { 1.0f, 3.0f, 3.0f,  2.0f };
+        const bool  mc[4]    = { false, false, false, true };
+        const bool  pc[4]    = { false, true,  false, false };
+        bool same = true;
+        for (unsigned i = 0; i < 4; ++i) {
+            // Upstream, verbatim.
+            float legacy = (mine[i] >= 0.0f) ? mine[i] : 1.0f;
+            if (peers[i] >= 0.0f && peers[i] < legacy) legacy = peers[i];
+            bool  lc = mc[i] || pc[i];
+            if (lc && legacy > 1.0f) legacy = 1.0f;
+            Arb a(mine[i], mc[i]); a.addPeer(peers[i], pc[i]);
+            if (a.effective() != legacy || a.combat() != lc) same = false;
+        }
+        CHECK("single peer matches upstream's inline formula", same);
+    }
+}
+
 // ---- 12. Worker-teardown ordering (models NetLink::stop()) -----------------------
 // The NetLink::stop() fix: ENet teardown (enet_deinitialize + CloseHandle) must
 // happen ONLY after the net worker has fully exited - the worker owns transport
@@ -1693,6 +1768,7 @@ int main() {
     testFlushWorldStateContract();
     testRelayPolicy();
     testSeqGuard();
+    testSpeedArbiter();
     testTeardownOrdering();
     std::printf("\nprototest: %d/%d checks passed%s\n",
                 g_total - g_failed, g_total, g_failed ? " - FAIL" : " - PASS");

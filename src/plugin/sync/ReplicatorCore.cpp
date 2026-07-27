@@ -50,9 +50,9 @@ Replicator::Replicator()
       midCursor_(0), midSliceMs_(0),
       censusParkDist_(0.0f), censusParks_(0), censusFreezeAi_(true),
       auditRows_(false), jailProbe_(false), jailObserve_(false),
-      speedLastApplied_(-1.0f), speedMyReq_(-1.0f), speedPeerReq_(-1.0f),
-      speedMyCombat_(false), speedPeerCombat_(false), speedLastSet_(-1.0f),
-      speedSeqOut_(1), speedSeqSeen_(0),
+      speedLastApplied_(-1.0f), speedMyReq_(-1.0f),
+      speedMyCombat_(false), speedLastSet_(-1.0f),
+      speedSeqOut_(1),
       speedLastSendMs_(0), speedCombatSampleMs_(0), speedCombatHoldMs_(0),
       spawnSync_(false), spawnPosLogMs_(0),
       spawnMintRadius_(0.0f), censusScanMs_(0),
@@ -245,11 +245,10 @@ void Replicator::resetSession() {
     // save's speed becomes the new baseline; the join's slew re-measures).
     speedLastApplied_ = -1.0f;
     speedMyReq_       = -1.0f;
-    speedPeerReq_     = -1.0f;
+    speedVotes_.clear();
     speedMyCombat_    = false;
-    speedPeerCombat_  = false;
     speedLastSet_     = -1.0f;
-    speedSeqSeen_     = 0;
+    speedSeqSeen_.reset();
     speedLastSendMs_  = 0;
     speedCombatSampleMs_ = 0;
     speedCombatHoldMs_ = 0;
@@ -362,6 +361,13 @@ void Replicator::clearOnePeerReplicationState(GameWorld* gw, u32 ownerId) {
         i->second.seqSeen.forget(ownerId);
     for (std::map<Key, PeerBuild>::iterator i = peerBuilds_.begin(); i != peerBuilds_.end(); ++i)
         i->second.seqSeen.forget(ownerId);
+
+    // Its speed VOTE. This one matters: the arbitration is min() over all votes,
+    // so a peer that paused (vote 0) and then dropped would hold every survivor
+    // at zero forever. The whole-session reset cleared this implicitly; the
+    // per-peer path has to do it explicitly.
+    speedVotes_.erase(ownerId);
+    speedSeqSeen_.forget(ownerId);
 
     // Its clock mapping: a reconnect renegotiates from scratch rather than
     // inheriting an offset learned on the dead session's route.

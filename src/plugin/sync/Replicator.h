@@ -29,6 +29,7 @@
 #include "SyncContext.h" // Phase 6: per-tick channel call environment
 #include "SyncTuning.h"  // Phase 6d: owned per-channel send-cadence tunables
 #include "SeqGuard.h"   // per-SENDER stale-row guard (N-player)
+#include "SpeedArbiter.h" // consensus game-speed rule (pure)
 
 class GameWorld;
 class Character;
@@ -1612,12 +1613,25 @@ private:
     // can pause, both must raise"). -1 = not yet known.
     float         speedLastApplied_;   // what WE last wrote (own-write vs user-click detector)
     float         speedMyReq_;         // this client's current request
-    float         speedPeerReq_;       // host only: the join's latest request (-1 = none yet)
     bool          speedMyCombat_;      // own-squad in-combat flag (~1 Hz sample)
-    bool          speedPeerCombat_;    // host only: the join's reported combat bit
+    // Host only: every peer's latest vote, keyed by ownerId. This was a single
+    // speedPeerReq_/speedPeerCombat_ pair, so with two joins the last REQ to
+    // arrive simply overwrote the other's - "consensus" degraded into "whoever
+    // spoke last". min() over the whole set restores the intended semantics:
+    // ANY player can pause or slow down, ALL must agree to raise.
+    struct SpeedVote {
+        float req;     // multiplier, 0 = paused, -1 = none yet
+        bool  combat;  // that peer reported its squad fighting
+        SpeedVote() : req(-1.0f), combat(false) {}
+    };
+    std::map<u32, SpeedVote> speedVotes_;
     float         speedLastSet_;       // host: last broadcast effective; join: last received
     u32           speedSeqOut_;        // per-sender monotonic seq for REQ/SET we send
-    u32           speedSeqSeen_;       // newest seq accepted from the peer (stale guard)
+    // Stale-REQ guard, PER SENDER. Was one scalar shared by every sender, so two
+    // joins with independent counters starved each other exactly like the
+    // change-gated rows did: the lower-seq join's speed votes were dropped
+    // forever. See SeqGuard.h.
+    sync::SeqGuard speedSeqSeen_;
     unsigned long speedLastSendMs_;    // last REQ (join) / SET (host) send, safety resend
     unsigned long speedCombatSampleMs_;// last own-combat sample time
     unsigned long speedCombatHoldMs_;  // last time own-squad combat read TRUE (cap hysteresis)
