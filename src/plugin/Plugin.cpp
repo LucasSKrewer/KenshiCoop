@@ -1595,20 +1595,39 @@ void titleUpdate_hook(TitleScreen* self) {
     // driveLoadSync never deref it. The load path is gated on savesReady():
     // before then the host's LOAD_GO simply waits in the inbound queue (no NACK
     // -> no stream yet), and the save-receiver half still commits chunks to disk.
-    if (g_net.isRunning() && !g_cfg.isHost && !g_gameStarted) {
+    const bool joinAtTitle = (g_net.isRunning() && !g_cfg.isHost && !g_gameStarted);
+    if (joinAtTitle) {
         processNetEvents(0);
         if (g_cfg.saveSync) driveSaveSync();
         if (g_cfg.loadSync && coop::engine::savesReady()) driveLoadSync(0);
-        // F2 panel while the join waits at the menu (guarded; the host's world is
-        // the destination, so we skip the config auto-load for a join session).
-        coopPanelDriveSeh(0);
-        return;
     }
 
-    // Co-op panel (F2) at the main menu for the HOST / offline case: lets a user
-    // toggle ONLINE and paste a Steam ID before any save is loaded. Guarded
-    // because the title-screen GUI stack is otherwise unexercised.
+    // Co-op panel (F2) at the main menu. For the HOST / offline case it lets a user
+    // toggle ONLINE and paste a Steam ID before any save is loaded; for a join
+    // waiting at the menu it is the only UI it has. Guarded because the
+    // title-screen GUI stack is otherwise unexercised.
     coopPanelDriveSeh(0);
+
+    // A join session normally stops here: the host's world is the destination, so
+    // the config auto-load is skipped and the join waits for the coordinated
+    // LOAD_GO.
+    //
+    // TEST-ONLY ESCAPE HATCH (KENSHICOOP_JOIN_LOCAL_LOAD=1, default OFF). The
+    // three-client rig needs all three clients IN THE WORLD to observe whether the
+    // host's peer relay delivers - but the coordinated load is host <-> ONE peer
+    // (SaveXfer is a single global state machine), and a live run showed the SECOND
+    // join's transfer failing outright:
+    //     join2: [save] XFER chunk write-open FAILED
+    //     join2: [save] XFER-FAILED badCrc=10
+    // leaving it parked at the menu forever, so the relay never got measured. With
+    // this on, a join loads its OWN identical copy of the save instead, which is
+    // sound precisely because the whole identity model already assumes both clients
+    // hold the same save (hands resolve to the same entities either way).
+    //
+    // NOT for real sessions: it skips the mechanism that guarantees the two worlds
+    // actually match. It exists so the relay can be measured BEFORE SaveXfer is
+    // N-ready, since otherwise the two blockers cannot be told apart.
+    if (joinAtTitle && !g_cfg.joinLocalLoad) return;
 
     if (g_autoLoadDone || g_cfg.save.empty()) return;
 

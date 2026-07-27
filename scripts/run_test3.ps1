@@ -213,7 +213,16 @@ function Set-ClientEnv {
     # every connect, so its fingerprint stays put, MATCHES the identical copies on
     # disk, and each join loads locally with no transfer.
     if (-not $CoordinateSaves) {
-        $env:KENSHICOOP_SAVE_SYNC = "0"
+        # A join NEVER auto-loads its own save while online: Plugin.cpp returns at
+        # the title screen because "the host's world is the destination", waiting for
+        # the coordinated LOAD_GO. That makes the relay unobservable until SaveXfer
+        # handles two joins, which it does not (run 3: join2's transfer failed with
+        # write-open/badCrc and it never left the menu). The test-only hatch lets
+        # each join load its OWN identical copy - sound because the identity model
+        # already assumes both clients hold the same save.
+        $env:KENSHICOOP_JOIN_LOCAL_LOAD = "1"
+        $env:KENSHICOOP_SAVE_SYNC       = "0"
+        $env:KENSHICOOP_LOAD_SYNC       = "0"
     }
     $env:KENSHICOOP_MODE         = $Mode
     $env:KENSHICOOP_TRANSPORT    = "udp"

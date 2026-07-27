@@ -54,6 +54,8 @@ $script:CoopDiagEnvKeys = @(
     'KENSHICOOP_JAIL_OBSERVE'
     # N-player experiment: per-authoring-peer driven-body tally (three-player smoke)
     'KENSHICOOP_DEBUG_OWNERS'
+    # Test-only: online join loads its own save instead of waiting for LOAD_GO
+    'KENSHICOOP_JOIN_LOCAL_LOAD'
     # --- test-only load-path knob (read in Plugin.cpp, not Config) --------------
     # Forces the join to NACK a MATCHing LOAD_GO so the real folder-transfer path
     # runs on one machine (bootstrap_stream / stream_test.ps1).

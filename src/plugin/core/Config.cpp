@@ -228,6 +228,7 @@ void loadConfig(Config& c) {
     c.hungerSync  = envOr("KENSHICOOP_HUNGER_SYNC", "1") != "0";
     c.saveSync    = envOr("KENSHICOOP_SAVE_SYNC", "1") != "0";
     c.loadSync    = envOr("KENSHICOOP_LOAD_SYNC", "1") != "0";
+    c.joinLocalLoad = envOr("KENSHICOOP_JOIN_LOCAL_LOAD", "0") == "1";
     c.prodSync    = envOr("KENSHICOOP_PROD_SYNC", "1") != "0";
     c.researchSync = envOr("KENSHICOOP_RESEARCH_SYNC", "1") != "0";
     c.storeSync   = envOr("KENSHICOOP_STORE_SYNC", "1") != "0";

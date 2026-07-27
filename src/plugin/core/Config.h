@@ -396,6 +396,11 @@ struct Config {
     // measures the raw swap behaviour with the detour + edge detection
     // alone). "0" is the A/B escape hatch.
     bool          loadSync;
+    bool          joinLocalLoad;
+    // TEST-ONLY (KENSHICOOP_JOIN_LOCAL_LOAD): let an ONLINE join load its own
+    // configured save at the title screen instead of waiting for the host's
+    // coordinated LOAD_GO. Default OFF - the shipped behavior is that the host's
+    // world is the destination. See the three-player rig note in Plugin.cpp.
 
     // KENSHICOOP_PROD_SYNC (default ON): production machine sync (protocol
     // 33) - the HOST samples machine-class buildings (production / crafting /
