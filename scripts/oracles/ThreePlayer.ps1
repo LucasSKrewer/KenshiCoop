@@ -1,4 +1,4 @@
-# ThreePlayer.ps1 - verdict for the THREE-client smoke run (scripts\run_test3.ps1).
+﻿# ThreePlayer.ps1 - verdict for the THREE-client smoke run (scripts\run_test3.ps1).
 #
 # Purpose-built and deliberately NARROW. The existing oracles are all pairwise
 # host-vs-join comparisons (~386 $JoinFile references across 8 files); making that
@@ -35,21 +35,38 @@ function Get-TpLines {
 # bodies for, and how many each. Returns @{ owners = @{id=count}; total = N }.
 function Get-TpOwnerTally {
     param([string[]]$Lines)
-    $res = @{ owners = @{}; total = 0; samples = 0 }
+    $res = @{ owners = @{}; everOwners = @{}; total = 0; samples = 0 }
     foreach ($l in $Lines) {
         if ($l -notmatch '\[owners\] driven total=(\d+) distinct=(\d+) byOwner:(.*)$') { continue }
         $res.samples++
         $total = [int]$Matches[1]
         $tail  = $Matches[3]
+        # STRING keys: ConvertTo-Json refuses a dictionary with non-string keys,
+        # and the verdict is serialized to verdict.json. Owner ids are compared as
+        # integers where ordering matters (see Get-TpOwnerIds).
         $o = @{}
         foreach ($m in [regex]::Matches($tail, '(\d+)=(\d+)')) {
-            $o[[int]$m.Groups[1].Value] = [int]$m.Groups[2].Value
+            $o["$($m.Groups[1].Value)"] = [int]$m.Groups[2].Value
         }
-        # keep the LAST sample (steady state, after mint/settle)
+        # Keep the LAST sample's counts (steady state), but accumulate the UNION of
+        # owners across every sample. A single peer body drifts in and out of the
+        # 3 s window as it enters/leaves interest, so judging on the last sample
+        # alone is a coin flip - the host's tally was observed alternating between
+        # "1=1" and "2=1" while it was demonstrably driving both.
         $res.owners = $o
         $res.total  = $total
+        foreach ($k in $o.Keys) { $res.everOwners[$k] = $true }
     }
     return $res
+}
+
+# Owner ids as sorted INTEGERS (the tally keys are strings so the verdict can be
+# serialized to JSON).
+function Get-TpOwnerIds {
+    param($Tally)
+    # @(...) is load-bearing: a single owner would otherwise come back as a bare
+    # int and .Count throws under Set-StrictMode.
+    return @($Tally.everOwners.Keys | ForEach-Object { [int]$_ } | Sort-Object)
 }
 
 function Get-TpLocalId {
@@ -136,7 +153,7 @@ function Test-ThreePlayer {
                                        "and did this client ever drive a body?") | Out-Null
             continue
         }
-        $ids = @($t.owners.Keys | Sort-Object)
+        $ids = Get-TpOwnerIds $t
         AddGate "relay_$n" ($ids.Count -ge 2) `
             ("drove bodies from owner(s) [$($ids -join ',')], total=$($t.total), " +
              "$($t.samples) sample(s) - need >= 2 distinct owners (host + the other join)") | Out-Null
@@ -146,7 +163,7 @@ function Test-ThreePlayer {
     # check that the run had real motion at all, so a relay FAIL cannot be blamed
     # on "nothing was moving anywhere".
     $ht = $tally['host']
-    $hostIds = @($ht.owners.Keys | Sort-Object)
+    $hostIds = Get-TpOwnerIds $ht
     AddGate "host_drove_both" ($hostIds.Count -ge 2) `
         ("host drove bodies from owner(s) [$($hostIds -join ',')], total=$($ht.total), " +
          "$($ht.samples) sample(s)") | Out-Null
