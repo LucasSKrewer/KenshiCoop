@@ -1,6 +1,7 @@
 #define _CRT_SECURE_NO_WARNINGS 1 // _snprintf is fine here; silence VC10 C4996
 
 #include "NetLink.h"
+#include "RelayPolicy.h"
 #include "SteamP2P.h"
 #include "../CoopLog.h"
 
@@ -75,6 +76,7 @@ void pushLocked(CRITICAL_SECTION& cs, std::vector<T>& q, const T& v) {
     q.push_back(v);
     LeaveCriticalSection(&cs);
 }
+
 } // namespace
 
 NetLink::NetLink()
@@ -444,6 +446,27 @@ void NetLink::threadLoop() {
                 }
                 case ENET_EVENT_TYPE_RECEIVE: {
                     const u8 type = packetType(ev.packet->data, (unsigned)ev.packet->dataLength);
+                    // PEER RELAY (N-player experiment): the host is the hub of a star
+                    // topology, so peer-authored state has to be forwarded to the OTHER
+                    // peers or they never observe it (this was the first of the four
+                    // two-player blockers). Forward the RAW datagram - ownerId is already
+                    // in every packet, so no re-authoring is needed and all 40+ local
+                    // handlers below stay untouched. Same channel and same reliability
+                    // flags as it arrived on, so per-channel ordering semantics hold.
+                    // A fresh ENetPacket per peer: enet_peer_send takes ownership, and
+                    // sharing one packet across manual sends (rather than via broadcast)
+                    // would double-free. See relayToPeers() for the policy + exclusions.
+                    // No-op with two players: the only peer is the sender, always skipped.
+                    if (isHost_ && enetHost_ && relayToPeers(type)) {
+                        for (size_t pi = 0; pi < enetHost_->peerCount; ++pi) {
+                            ENetPeer* dst = &enetHost_->peers[pi];
+                            if (dst == ev.peer) continue;
+                            if (dst->state != ENET_PEER_STATE_CONNECTED) continue;
+                            ENetPacket* fwd = enet_packet_create(
+                                ev.packet->data, ev.packet->dataLength, ev.packet->flags);
+                            if (fwd) enet_peer_send(dst, ev.channelID, fwd);
+                        }
+                    }
                     if (isHost_ && type == PKT_HELLO) {
                         HelloPacket h;
                         if (readPacket(ev.packet->data, (unsigned)ev.packet->dataLength, &h)) {
@@ -457,15 +480,27 @@ void NetLink::threadLoop() {
                                 enet_peer_disconnect(ev.peer, 0);
                             } else {
                                 u32 id = nextId++;
-                                // TWO-PLAYER ASSUMPTION (step-6 guard): the sync model
-                                // is host + ONE join. Join-authored events/inventory/
-                                // conservation intents reach only the host and are NOT
-                                // relayed to other joins, and OWNER_ID_ALL sweeps assume
-                                // a single peer. A third player connects at the wire
-                                // level but will silently desync - fail loudly instead.
+                                // TWO-PLAYER ASSUMPTION (step-6 guard), N-player experiment
+                                // status. The wire-level relay above now DOES forward
+                                // peer-authored state to the other peers, so the original
+                                // reason for this guard is addressed. What still is not:
+                                //   - seq guards are per-ROW, not per-(sender,row)
+                                //     (FacRow/DoorRow/PeerBuild/ProdRow/ResearchRow::seqSeen):
+                                //     two senders with independent counters starve each other,
+                                //     the lower-seq sender's rows being dropped as stale forever
+                                //   - singular peer state: speedPeerReq_, peerCam_, pinPeer_,
+                                //     peerPresent, and the leave path's clearPeerReplicationState
+                                //     all assume exactly one peer
+                                //   - SaveXfer is one global send/recv state machine
+                                //   - the Steam P2P tunnel is single-peer BY CONSTRUCTION on the
+                                //     HOST side (g_peer is one SteamId; other senders are
+                                //     dropped). Joins only ever talk to the host, so N players
+                                //     is reachable over DIRECT UDP but not over the Steam tunnel.
+                                // Still expect desync past two - keep failing loudly.
                                 if (id >= 2) {
-                                    netErr("3+ players unsupported: join-authored state is "
-                                           "not relayed peer-to-peer; expect desync");
+                                    netErr("3+ players experimental: state is now relayed, but "
+                                           "per-sender seq guards / singular peer state / SaveXfer "
+                                           "are not N-ready; expect desync");
                                 }
                                 ev.peer->data = (void*)(size_t)id;
                                 WelcomePacket w;

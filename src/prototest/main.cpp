@@ -30,6 +30,7 @@
 #include "../plugin/core/SteamId.h"
 #include "../plugin/core/WorkPose.h"
 #include "../plugin/core/DeathLatch.h"
+#include "../plugin/net/RelayPolicy.h" // N-player host relay classification
 #include "../plugin/core/Inbound.h" // Phase 0 queue-lifecycle fixes (header-only)
 #include "../plugin/game/EngineFaults.h" // Phase 5c: fault throttle (pure inline)
 #include "../plugin/game/EngineCaps.h"   // Phase 5d: capability registry (pure inline)
@@ -1269,6 +1270,48 @@ static void testFlushWorldStateContract() {
     #undef SP_KEPT
 }
 
+// ---- 12b. Host peer-relay policy (N-player experiment) --------------------------
+// The host forwards peer-AUTHORED state to its other peers (star topology; every
+// join holds only one connection, to the host). A misclassification here is not a
+// cosmetic bug: relaying a join->host REQUEST asks the wrong party, and relaying
+// COMBAT_HIT would let a second peer apply the same damage again. Lock the table.
+static void testRelayPolicy() {
+    std::printf("== host peer-relay policy (N-player) ==\n");
+    #define RELAY_YES(t) CHECK("relayed: " #t, coop::relayToPeers((coop::u8)coop::t))
+    #define RELAY_NO(t)  CHECK("not relayed: " #t, !coop::relayToPeers((coop::u8)coop::t))
+
+    // Peer-authored state every other peer must observe.
+    RELAY_YES(PKT_ENTITY_BATCH);      RELAY_YES(PKT_EVENT);
+    RELAY_YES(PKT_INV_SNAPSHOT);      RELAY_YES(PKT_INV_XFER);
+    RELAY_YES(PKT_WORLD_ITEM);        RELAY_YES(PKT_WORLD_ITEM_REMOVE);
+    RELAY_YES(PKT_WORLD_DROP);        RELAY_YES(PKT_WORLD_PICKUP);
+    RELAY_YES(PKT_MEDICAL);           RELAY_YES(PKT_TREATMENT);
+    RELAY_YES(PKT_STATS);             RELAY_YES(PKT_MONEY);
+    RELAY_YES(PKT_FACTION);           RELAY_YES(PKT_DOOR);
+    RELAY_YES(PKT_BUILD_PLACE);       RELAY_YES(PKT_BUILD_STATE);
+    RELAY_YES(PKT_BUILD_DOOR);        RELAY_YES(PKT_BUILD_REMOVE);
+
+    // Handshake / per-peer control.
+    RELAY_NO(PKT_HELLO);   RELAY_NO(PKT_WELCOME);   RELAY_NO(PKT_LEAVE);
+    // Pairwise clock sync: a relayed echo would corrupt a third party's offset.
+    RELAY_NO(PKT_TIME_PING); RELAY_NO(PKT_TIME_PONG);
+    // join->host requests the host answers itself.
+    RELAY_NO(PKT_SPEED_REQ); RELAY_NO(PKT_SPAWN_REQ);
+    RELAY_NO(PKT_SAVE_REQ);  RELAY_NO(PKT_LOAD_REQ); RELAY_NO(PKT_LOAD_NACK);
+    // Host-AUTHORED channels: the host already broadcasts these.
+    RELAY_NO(PKT_SPEED_SET); RELAY_NO(PKT_STEALTH); RELAY_NO(PKT_SPAWN_INFO);
+    RELAY_NO(PKT_TIME);      RELAY_NO(PKT_PROD);    RELAY_NO(PKT_NPC_CENSUS);
+    RELAY_NO(PKT_RESEARCH);
+    // Bulk save/load transfer: host <-> ONE peer, and SaveXfer is a global machine.
+    RELAY_NO(PKT_SAVE_BEGIN); RELAY_NO(PKT_SAVE_FILE); RELAY_NO(PKT_SAVE_DONE);
+    RELAY_NO(PKT_SAVE_ACK);   RELAY_NO(PKT_LOAD_GO);
+    // Deferred until their singular state becomes per-peer / to avoid double-apply.
+    RELAY_NO(PKT_CAM_HINT);   RELAY_NO(PKT_COMBAT_HIT);
+
+    #undef RELAY_YES
+    #undef RELAY_NO
+}
+
 // ---- 12. Worker-teardown ordering (models NetLink::stop()) -----------------------
 // The NetLink::stop() fix: ENet teardown (enet_deinitialize + CloseHandle) must
 // happen ONLY after the net worker has fully exited - the worker owns transport
@@ -1546,6 +1589,7 @@ int main() {
     testDeathRekey();
     testInboundLifecycle();
     testFlushWorldStateContract();
+    testRelayPolicy();
     testTeardownOrdering();
     std::printf("\nprototest: %d/%d checks passed%s\n",
                 g_total - g_failed, g_total, g_failed ? " - FAIL" : " - PASS");
