@@ -626,8 +626,19 @@ void onSaveFile(const SaveFileHeader& h, const char* path, const unsigned char* 
         g_recvSeen[h.fileIdx] = 1;
     }
 
-    LONG hi = 0;
-    SetFilePointer(g_recvHandle, (LONG)h.offset, &hi, FILE_BEGIN);
+    // offset is u32 on the wire (up to 4 GB), so it does NOT fit a signed LONG.
+    // Seeking with the truncated value would land negative past 2 GB; worse, a
+    // failed seek used to go unnoticed and the chunk was written wherever the
+    // pointer happened to sit - and the CRC would NOT catch it, because it is
+    // computed over the bytes off the wire, never re-read from disk. Seek 64-bit
+    // and treat a failed seek as a failed chunk (the CRC table then mismatches at
+    // DONE, which is the outcome we want: a rejected transfer, not a silent lie).
+    LARGE_INTEGER seek;
+    seek.QuadPart = (LONGLONG)h.offset;
+    if (!SetFilePointerEx(g_recvHandle, seek, 0, FILE_BEGIN)) {
+        coop::logErrLine("[save] XFER chunk seek FAILED");
+        return;
+    }
     DWORD wrote = 0;
     if (h.dataLen > 0) {
         if (!WriteFile(g_recvHandle, data, h.dataLen, &wrote, 0) || wrote != h.dataLen) {
