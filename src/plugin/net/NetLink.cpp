@@ -244,7 +244,10 @@ void NetLink::queueSaveBegin(const SaveBeginPacket& pkt) { pushLocked(outCs_, ou
 // two-player path is untouched. Falls back to broadcast if the target vanished
 // (peer dropped mid-transfer) so the packet is never leaked.
 void NetLink::sendToSaveTarget(ENetPacket* out, unsigned char channel) {
-    const u32 target = saveTarget();
+    sendAddressed(out, channel, saveTarget());
+}
+
+void NetLink::sendAddressed(ENetPacket* out, unsigned char channel, u32 target) {
     if (target != OWNER_ID_ALL) {
         if (enetHost_) {
             for (size_t i = 0; i < enetHost_->peerCount; ++i) {
@@ -285,7 +288,14 @@ void NetLink::queueSaveDone(const SaveDoneHeader& hdr, const u32* crcs,
 
 void NetLink::queueSaveAck(const SaveAckPacket& pkt) { pushLocked(outCs_, outSaveAck_, pkt); }
 
-void NetLink::queueLoadGo(const LoadGoPacket& pkt) { pushLocked(outCs_, outLoadGo_, pkt); }
+void NetLink::queueLoadGo(const LoadGoPacket& pkt) { queueLoadGo(pkt, OWNER_ID_ALL); }
+
+void NetLink::queueLoadGo(const LoadGoPacket& pkt, u32 targetPeer) {
+    OutLoadGo e;
+    e.pkt    = pkt;
+    e.target = targetPeer;
+    pushLocked(outCs_, outLoadGo_, e);
+}
 
 void NetLink::queueLoadReq(const LoadReqPacket& pkt) { pushLocked(outCs_, outLoadReq_, pkt); }
 
@@ -1635,7 +1645,7 @@ void NetLink::threadLoop() {
         // share CH_BULK with the save transfer they gate (a NACK's fallback
         // stream must stay ordered behind its GO), and off CH_RELIABLE so they
         // do not queue behind - or ahead of - live game events.
-        std::vector<LoadGoPacket>   loadGos;
+        std::vector<OutLoadGo>      loadGos;
         std::vector<LoadReqPacket>  loadReqs;
         std::vector<LoadNackPacket> loadNacks;
         EnterCriticalSection(&outCs_);
@@ -1644,10 +1654,10 @@ void NetLink::threadLoop() {
         loadNacks.swap(outLoadNack_);
         LeaveCriticalSection(&outCs_);
         for (size_t i = 0; i < loadGos.size(); ++i) {
-            ENetPacket* out = enet_packet_create(&loadGos[i], sizeof(LoadGoPacket),
+            ENetPacket* out = enet_packet_create(&loadGos[i].pkt, sizeof(LoadGoPacket),
                                                  ENET_PACKET_FLAG_RELIABLE);
             if (isHost_) {
-                enet_host_broadcast(enetHost_, CH_BULK, out);
+                sendAddressed(out, CH_BULK, loadGos[i].target);
             } else if (serverPeer_ && serverPeer_->state == ENET_PEER_STATE_CONNECTED) {
                 enet_peer_send(serverPeer_, CH_BULK, out);
             } else {

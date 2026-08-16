@@ -157,7 +157,8 @@ public:
     // (load this save now, fingerprint attached); REQ join -> host (a
     // suppressed local load forwarded for arbitration); NACK join -> host
     // (copy missing/diverged - answer with a SaveXfer). All CH_RELIABLE.
-    void queueLoadGo(const LoadGoPacket& pkt);
+    void queueLoadGo(const LoadGoPacket& pkt);                  // broadcast
+    void queueLoadGo(const LoadGoPacket& pkt, u32 targetPeer);  // one peer
     void queueLoadReq(const LoadReqPacket& pkt);
     void queueLoadNack(const LoadNackPacket& pkt);
 
@@ -297,7 +298,14 @@ private:
     std::vector<OutSaveDone>     outSaveDone_;
     std::vector<SaveAckPacket>   outSaveAck_;
     // Reliable coordinated-load packets (protocol 32). Guarded by outCs_.
-    std::vector<LoadGoPacket>    outLoadGo_;
+    // A GO carries the peer it is FOR: a connect-push must reach only the peer
+    // that just joined, never the ones already playing in this world (they would
+    // NACK on a diverged fingerprint and then fail to commit, because their save
+    // folder is open). OWNER_ID_ALL keeps the broadcast behaviour for a genuine
+    // host-side reload, which every join must follow. Wire format is unchanged -
+    // the target is routing state, not a protocol field.
+    struct OutLoadGo { LoadGoPacket pkt; u32 target; };
+    std::vector<OutLoadGo>       outLoadGo_;
     std::vector<LoadReqPacket>   outLoadReq_;
     std::vector<LoadNackPacket>  outLoadNack_;
 
@@ -308,6 +316,9 @@ private:
     // MAIN thread via localId(); volatile LONG so the read is atomic + uncached.
     volatile LONG myId_;
     void sendToSaveTarget(ENetPacket* out, unsigned char channel);
+    // Send to ONE peer by owner id, or broadcast when target is OWNER_ID_ALL.
+    // If the target is gone the packet is DROPPED, never broadcast as a fallback.
+    void sendAddressed(ENetPacket* out, unsigned char channel, u32 target);
     volatile LONG saveTarget_;  // peer the in-flight save transfer is for
 
     // Session epoch (protocol 44). sendEpoch_ is bumped by the MAIN thread

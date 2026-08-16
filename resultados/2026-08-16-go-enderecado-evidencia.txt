@@ -1,0 +1,13 @@
+# GO enderecado (correcao do push para peer ja carregado)
+[20:00:31.290] [HOST] INFO: [boot] GO->join id=1 name='squad1' fp=d3ba3dbf (push on connect) to=targeted n=1
+[20:01:16.172] [HOST] INFO: [boot] GO->join id=2 name='squad1' fp=dc3b50d4 (push on connect) to=targeted n=1
+
+# transferencias: 2 commits, 0 falhas
+[20:00:34.919] [HOST] INFO: [save] XFER-ACK id=1 from=1 ok=1 files=47 bytes=4093169
+[20:01:20.751] [HOST] INFO: [save] XFER-ACK id=2 from=2 ok=1 files=47 bytes=4093924
+[20:00:34.851] [JOIN] INFO: [save] XFER-COMMIT id=1 name='squad1' files=47 bytes=4093169 badCrc=0 ms=1953
+[20:01:20.731] [JOIN] INFO: [save] XFER-COMMIT id=2 name='squad1' files=47 bytes=4093924 badCrc=0 ms=2625
+
+# join1 recebeu apenas o GO id=1 (nao foi puxado de volta quando join2 entrou)
+[20:00:32.798] [JOIN] INFO: [load] GO id=1 name='squad1' hostFp=d3ba3dbf localFp=32786695 DIVERGED -> NACK (transfer)
+[20:00:55.776] [JOIN] INFO: KenshiCoop: gameplay started

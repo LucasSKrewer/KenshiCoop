@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <string>
 #include <deque>
+#include <vector>
 #include <set>
 
 #include "CoopLog.h"
@@ -117,6 +118,17 @@ struct SessionController {
     // save.
     bool         bootstrapArmed;   // host: a connect-triggered save is baking
     std::string  bootstrapName;    // host: that save's name (== savePending)
+    // WHO the bootstrap GO is for. The GO used to be broadcast, so a second join
+    // pulled every peer already in this world back through a load: their
+    // fingerprint had diverged (they had been playing), so they NACKed, and the
+    // transfer that followed could not commit - their save folder is open while
+    // they play. Measured on 2026-08-16: XFER-FAILED badCrc=0, and that join then
+    // ran a world the host had never sent it. A peer already in the world does
+    // not need the bootstrap; only the arriving one does.
+    // Contains OWNER_ID_ALL => broadcast (a genuine host reload, which every join
+    // must follow). Otherwise one addressed GO per listed peer, so simultaneous
+    // connects each get theirs instead of the last one overwriting the rest.
+    std::vector<coop::u32> bootstrapPeers;
     // World-swap edge detection (protocol 32): once gameplay has started,
     // gameplayLive dropping means the engine is swapping worlds (a load); live
     // again = the reload edge (session-reset point). Sub-second dips are FLICKER
@@ -156,6 +168,7 @@ std::string& g_savePending     = g_session.savePending;
 coop::u32&   g_saveReqId       = g_session.saveReqId;
 bool&        g_bootstrapArmed  = g_session.bootstrapArmed;
 std::string& g_bootstrapName   = g_session.bootstrapName;
+std::vector<coop::u32>& g_bootstrapPeers = g_session.bootstrapPeers;
 DWORD&       g_swapStartTick   = g_session.swapStartTick;
 coop::u32&   g_swapHookTicks   = g_session.swapHookTicks;
 bool&        g_loadSuppressOn  = g_session.loadSuppressOn;
@@ -261,16 +274,26 @@ void sessionResetForWorldReload() {
 // the host is already in-game (processNetEvents), or the host's gameplay
 // starting with a peer already connected (mainLoop_hook gameplay-start edge).
 // Host + saveSync + in-game are the caller's responsibility.
-void armConnectPush() {
+// forPeer: the peer that just connected, or OWNER_ID_ALL when gameplay itself
+// just started (every waiting join must be pulled into the new world). Targets
+// ACCUMULATE: two peers connecting back to back both need a GO, and the bake is
+// asynchronous, so a single-valued target would let the second connect overwrite
+// the first and leave that join stuck at the menu forever.
+void armConnectPush(coop::u32 forPeer) {
     char cur[64];
     cur[0] = '\0';
     coop::engine::saveInfo(cur, sizeof(cur), 0, 0);
     std::string name = cur[0] ? cur : "coopresume";
     g_bootstrapArmed = true;
     g_bootstrapName  = name;
-    char b[144];
+    bool have = false;
+    for (size_t i = 0; i < g_bootstrapPeers.size(); ++i)
+        if (g_bootstrapPeers[i] == forPeer) { have = true; break; }
+    if (!have) g_bootstrapPeers.push_back(forPeer);
+    char b[176];
     _snprintf(b, sizeof(b) - 1,
-              "[boot] baking save '%s' to push to join on connect", name.c_str());
+              "[boot] baking save '%s' to push to join on connect (for=%u targets=%u)",
+              name.c_str(), (unsigned)forPeer, (unsigned)g_bootstrapPeers.size());
     b[sizeof(b) - 1] = '\0'; coopLog(b);
     if (!coop::engine::saveGameAs(name))
         coopErr("[boot] connect-push save FAILED to issue");
@@ -309,7 +332,7 @@ void processNetEvents(GameWorld* gw) {
         // host is NOT yet in-game (title/loading), the gameplay-start edge in
         // mainLoop_hook arms this instead - covers either connect ordering.
         if (g_cfg.isHost && g_cfg.saveSync && g_gameStarted)
-            armConnectPush();
+            armConnectPush(*it);   // only the peer that just arrived
     }
     for (std::deque<coop::u32>::iterator it = leaves.begin(); it != leaves.end(); ++it) {
         char b[64];
@@ -491,16 +514,32 @@ void driveSaveSync() {
                     go.loadId      = ++g_loadIdOut;
                     go.fingerprint = coop::savexfer::folderFingerprint(g_bootstrapName);
                     strncpy(go.name, g_bootstrapName.c_str(), sizeof(go.name) - 1);
-                    g_net.queueLoadGo(go);
+                    // Same loadId to every target: it is ONE load of ONE save, and
+                    // the NACK path already keys the backlog by the peer that asked.
+                    // Broadcast ONLY on an explicit OWNER_ID_ALL. An empty list
+                    // must NOT mean "everyone": that is how the bug this fixes
+                    // would creep back in if the list is ever cleared out from
+                    // under an armed bootstrap. Nobody to tell => tell nobody.
+                    bool toAll = false;
+                    for (size_t i = 0; i < g_bootstrapPeers.size(); ++i)
+                        if (g_bootstrapPeers[i] == coop::OWNER_ID_ALL) { toAll = true; break; }
+                    if (toAll) g_net.queueLoadGo(go);
+                    else if (g_bootstrapPeers.empty())
+                        coopErr("[boot] bootstrap armed with NO target; GO not sent");
+                    else
+                        for (size_t i = 0; i < g_bootstrapPeers.size(); ++i)
+                            g_net.queueLoadGo(go, g_bootstrapPeers[i]);
                     g_loadPumpArmTick = GetTickCount();
-                    char b2[192];
+                    char b2[224];
                     _snprintf(b2, sizeof(b2) - 1,
-                              "[boot] GO->join id=%u name='%s' fp=%08x (push on connect)",
-                              go.loadId, g_bootstrapName.c_str(), go.fingerprint);
+                              "[boot] GO->join id=%u name='%s' fp=%08x (push on connect) to=%s n=%u",
+                              go.loadId, g_bootstrapName.c_str(), go.fingerprint,
+                              toAll ? "ALL" : "targeted", (unsigned)g_bootstrapPeers.size());
                     b2[sizeof(b2) - 1] = '\0'; coopLog(b2);
                     warnIfNoPortraits(g_bootstrapName);
                     g_bootstrapArmed = false;
                     g_bootstrapName.clear();
+                    g_bootstrapPeers.clear();
                     g_savePending.clear();
                 } else if (g_peerPresent)
                     // Push-save-on-connect: this one goes to EVERY peer (they all
@@ -1485,7 +1524,7 @@ void mainLoop_hook(GameWorld* gw, float dt) {
         // world yet). Now that gameplay is live, arm the connect-push so the
         // waiting join gets pulled into this world.
         if (g_cfg.isHost && g_cfg.saveSync && g_peerPresent)
-            armConnectPush();
+            armConnectPush(coop::OWNER_ID_ALL);  // gameplay just started: all waiting joins
     }
 
     // Manual-validation helper (host only): KENSHICOOP_AUTORECRUIT=N seconds -
